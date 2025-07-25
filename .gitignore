@@ -1,3 +1,15 @@
+#gitignore 
+*.log
+*.sif
+.vscode
+*.code-workspace
+templates/
+vestigial-tails/
+sherlock/
+elm/
+farmshare/
+oak/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
