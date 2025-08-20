@@ -78,6 +78,7 @@ class RAGService:
                     metadata['source'] = filename
                     doc = Document(page_content=post.content, metadata=metadata)
                     documents.append(doc)
+                    logger.info(f"ok loading from {file_path}")
                 except Exception as e:
                     logger.warning(f"Could not read or parse front matter from file {file_path}: {e}")
         return documents
