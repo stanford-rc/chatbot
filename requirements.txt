@@ -1,0 +1,34 @@
+# requirements.txt
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-dotenv
+torch
+transformers
+accelerate
+bitsandbytes
+langchain
+langchain-community
+langchain-huggingface
+langchain-core
+protobuf
+sentencepiece
+# For BM25Retriever
+rank_bm25
+python-frontmatter
+
+
+    # pip install sentencepiece 
+    # pip install flask
+    # pip install "transformers[torch]"
+    # pip install langchain
+    # pip install langchain-openai
+    # pip install langchain-community
+    # pip install python-dotenv
+    # pip install smolagents
+    # pip install "fastapi[standard]"
+    # pip install protobuf
+    # pip install rank_bm25
+    # pip install langchain-huggingface
+    # pip install requests
+    # pip install pyyaml
