@@ -205,3 +205,4 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 .langchain.db
+*_url_map.csv
