@@ -49,7 +49,7 @@ apptainer exec --nv $SIF_NAME python3 -c "import transformers; print(transformer
 apptainer instance start  --nv $SIF_NAME chatapi
 
 #apptainer exec --nv instance://chatapi python3 chat.py
-apptainer exec --nv instance://chatapi uvicorn main:app --reload
+apptainer exec --nv instance://chatapi uvicorn app.main:app --reload --reload-dir app
 #apptainer exec instance://chatapi fastapi run 
 #apptainer exec instance://chatapi uvicorn robotchat:app
 
