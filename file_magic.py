@@ -31,15 +31,15 @@ def process_markdown_file(file_path):
 # To add a new repository, simply add a new dictionary to the SOURCES list.
 SOURCES = [
     {
-        "repo_url": "https://github.com/saracook/farmshare-docs.git",
+        "repo_url": "https://github.com/stanford-rc/farmshare-docs.git",
         "repo_name": "farmshare",  # A short name for creating directories
     },
     {
-        "repo_url": "git@github.com:saracook/docs.elm.stanford.edu.git",
+        "repo_url": "https://github.com/stanford-rc/docs.elm.stanford.edu.git",
         "repo_name": "elm",  # A short name for creating directories
     },
      {
-        "repo_url": "git@github.com:saracook/docs.oak.stanford.edu.git",
+        "repo_url": "https://github.com/stanford-rc/docs.oak.stanford.edu.git",
         "repo_name": "oak",  # A short name for creating directories
     },   
     {
