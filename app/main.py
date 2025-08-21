@@ -24,6 +24,10 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
+#from mistral_inference import mistral_inference  # Import the new inference function bcr 8_21_25
+from mistral_inference.transformer import Transformer # see above
+from mistral_inference.generate import generate # see above
+
 # --- 1. Configuration Management ---
 
 logging.basicConfig(level=logging.INFO, filename='myapp.log', format='%(asctime)s - %(levelname)s - %(message)s')
@@ -99,7 +103,7 @@ class RAGService:
             tokenizer = AutoTokenizer.from_pretrained(self.settings.MODEL_PATH)
             pipe = pipeline(
                 "text-generation", model=model, tokenizer=tokenizer, max_new_tokens=400,
-                temperature=0.5, do_sample=True, pad_token_id=tokenizer.eos_token_id,
+                temperature=0.0, do_sample=True, pad_token_id=tokenizer.eos_token_id,
                 return_full_text=False
             )
             self.llm = HuggingFacePipeline(pipeline=pipe)
@@ -130,7 +134,8 @@ Your task is to answer the user's query based ONLY on the provided documentation
 - Your answer must be grounded in the facts from the CONTEXT below.
 - If the context does not contain the answer, state that you could not find the information.
 - Do not reference any specific documents by their filenames. If you must refer to a file, look up the title in the file's metadata.
-- Answer ONLY the user's query. Do not add any extra information, questions, or conversational text after the answer is complete.
+- Prioritize concrete steps and bullet points.
+- If you have extra tokens, you can give the user fun trivia about their cluster's namesake. For reference, Carina is named after the Carina nebula, Sherlock is named after O' Doyle's Sherlock Holmes, Marlowe is named after Raymond Chandler's Philip Marlowe, Farmshare is named after Stanford University's nickname, "The Farm," Nero is named after Rex Stout's Nero Wolfe.
 
 CONTEXT:
 {context}

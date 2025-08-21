@@ -16,6 +16,7 @@ protobuf
 sentencepiece
 # For BM25Retriever
 rank_bm25
+<<<<<<< HEAD
 python-frontmatter
 
 
@@ -33,3 +34,6 @@ python-frontmatter
     # pip install langchain-huggingface
     # pip install requests
     # pip install pyyaml
+=======
+python-frontmatter
+>>>>>>> 4b2a94a0c56e82d2d5df48fceb5775c669eae800

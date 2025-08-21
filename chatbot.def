@@ -4,10 +4,10 @@ from: python:3.12
 
 %files
 
-    sherlock/   sherlock
-    farmshare/  farmshare
-    oak/    oak
-    elm/    elm
+    /scratch/groups/bprogers/bcritt/mds/sherlock/   sherlock
+    /scratch/groups/bprogers/bcritt/mds/farmshare/  farmshare
+    /scratch/groups/bprogers/bcritt/mds/oak/    oak
+    /scratch/groups/bprogers/bcritt/mds/elm/    elm
     .langchain.db
     requirements.txt
 
