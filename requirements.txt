@@ -1,4 +1,5 @@
 # requirements.txt
+mistral_inference
 fastapi
 uvicorn[standard]
 pydantic-settings
