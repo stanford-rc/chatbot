@@ -1,5 +1,3 @@
-# main.py
-
 import logging
 import os
 import re
@@ -7,8 +5,6 @@ from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 import frontmatter
-import torch
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langchain.docstore.document import Document
@@ -19,10 +15,16 @@ from langchain_core.globals import set_llm_cache
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from langchain_huggingface import HuggingFacePipeline
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from dotenv import load_dotenv
+
+import torch
+from mistral_inference.transformer import Transformer
+from mistral_inference.generate import generate
+from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
+from mistral_common.protocol.instruct.messages import UserMessage
+from mistral_common.protocol.instruct.request import ChatCompletionRequest
 
 # --- 1. Configuration Management ---
 
@@ -93,17 +95,34 @@ class RAGService:
 
         try:
             logger.info(f"Loading model from {self.settings.MODEL_PATH}...")
-            model = AutoModelForCausalLM.from_pretrained(
-                self.settings.MODEL_PATH, torch_dtype=torch.bfloat16, device_map="auto"
-            )
-            tokenizer = AutoTokenizer.from_pretrained(self.settings.MODEL_PATH)
-            pipe = pipeline(
-                "text-generation", model=model, tokenizer=tokenizer, max_new_tokens=400,
-                temperature=0.5, do_sample=True, pad_token_id=tokenizer.eos_token_id,
-                return_full_text=False
-            )
-            self.llm = HuggingFacePipeline(pipeline=pipe)
-            logger.info("Model and pipeline loaded successfully.")
+            tokenizer = MistralTokenizer.from_file(f"{self.settings.MODEL_PATH}/tokenizer.model.v3")
+            
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            logger.info("Using Device: %s", device)
+            
+            model = Transformer.from_folder(self.settings.MODEL_PATH, device=device)
+            
+            if torch.cuda.is_available():
+                cuda_capability = torch.cuda.get_device_capability(0)[0]
+                torch_dtype = torch.float16 if cuda_capability >= 8 else torch.float32
+                model = model.to(dtype=torch_dtype)
+                logger.info("Model is using torch_dtype: %s", torch_dtype)
+            else:
+                torch_dtype = torch.float32
+            
+            self.tokenizer = tokenizer
+            self.model = model
+            
+            self.llm = RunnableLambda(self.mistral_runnable_llm)
+            
+            logger.info("Model and tokenizer loaded successfully.")
+        except RuntimeError as e:
+            logger.error(f"CUDA error occurred: {e}, switching to CPU.")
+            device = 'cpu'
+            model = Transformer.from_folder(self.settings.MODEL_PATH, device=device)
+            torch_dtype = torch.float32
+            self.tokenizer = tokenizer
+            self.model = model
         except Exception as e:
             logger.critical(f"FATAL: Could not load the model. Error: {e}")
             raise
@@ -124,14 +143,15 @@ class RAGService:
             self.retrievers[cluster_name] = BM25Retriever.from_documents(split_docs)
             logger.info(f"Created retriever for '{cluster_name}'.")
 
-            prompt_template = ChatPromptTemplate.from_template(
+        prompt_template = ChatPromptTemplate.from_template(
             """<s>[INST] You are an expert assistant for the Stanford Research Computing Center (SRCC).
 Your task is to answer the user's query based ONLY on the provided documentation context.
 - Your answer must be grounded in the facts from the CONTEXT below.
-- If the context does not contain the answer, state that you could not find the information.
+- Determine which cluster documentation to consult based on the user's input. If they don't supply an identifiable cluster, you may ask for more information. 
+- If the context does not contain the answer, state that you could not find the information and refer the user to srcc-support@stanford.edu.
 - Do not reference any specific documents by their filenames. If you must refer to a file, look up the title in the file's metadata.
 - Answer ONLY the user's query. Do not add any extra information, questions, or conversational text after the answer is complete.
-
+- Prioritize bulleted steps for the practical completion of a user's task.
 CONTEXT:
 {context}
 
@@ -160,13 +180,45 @@ USER QUERY:
         )
         logger.info("RAG service initialization complete.")
 
+    def mistral_runnable_llm(self, inputs: Dict) -> str:
+        try:
+            logger.info(f"mistral_runnable_llm received inputs: {inputs}")
+            query = str(inputs)
+            completion_request = ChatCompletionRequest(messages=[UserMessage(content=query)])
+            tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
+
+            out_tokens, _ = generate(
+                [tokens], self.model, max_tokens=264, temperature=0.0, eos_id=self.tokenizer.instruct_tokenizer.tokenizer.eos_id
+            )
+            result = self.tokenizer.instruct_tokenizer.tokenizer.decode(out_tokens[0])
+
+            return result
+        except RuntimeError as e:
+            logger.error(f"CUDA error occurred during inference: {e}, switching to CPU.")
+            # Perform inference with CPU fallback
+            result = self.perform_inference_cpu(query)
+            return result
+        except Exception as e:
+            logger.error(f"Error during LLM generation: {e}")
+            raise ValueError(f"LLM generation error: {e}")
+
+    def perform_inference_cpu(self, query: str) -> str:
+        combined_prompt = f"{query}\\n\\nUser: {query}"
+        completion_request = ChatCompletionRequest(messages=[UserMessage(content=combined_prompt)])
+        tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
+        
+        out_tokens, _ = generate(
+            [tokens], self.model, max_tokens=64, temperature=0.0, eos_id=self.tokenizer.instruct_tokenizer.tokenizer.eos_id
+        )
+        result = self.tokenizer.instruct_tokenizer.tokenizer.decode(out_tokens[0])
+        return result
+
     def _identify_cluster(self, user_query: str) -> str:
         user_query_lower = user_query.lower()
         for cluster_name in self.settings.CLUSTERS.keys():
             if cluster_name in user_query_lower:
                 return cluster_name
         return "unknown"
-
 
     def query(self, request: QueryRequest) -> QueryResponse:
         """Processes a user query, returning a clean answer and a separate list of sources."""
@@ -195,7 +247,6 @@ USER QUERY:
             logger.error(f"Error during RAG chain invocation: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to generate a response from the model.")
 
-        # 1. Extract cited filenames and build the list of Source objects
         cited_filenames = set(re.findall(r'\[\s*([^\]]+)\]', llm_answer_with_placeholders))
         metadata_lookup: Dict[str, Dict] = {
             doc.metadata['source']: doc.metadata
@@ -210,16 +261,13 @@ USER QUERY:
                 url = metadata.get('url')
                 source_objects.append(Source(title=title, url=url))
         
-        # 2. Clean the LLM's answer by removing all internal citation placeholders.
         final_answer = re.sub(r'\s*\[source:\s*[^\]]+\]', '', llm_answer_with_placeholders).strip()
 
-        # 3. Return the clean answer and the separate source list.
         return QueryResponse(
             answer=final_answer,
             cluster=cluster,
             sources=source_objects
         )
-
 
 # --- 4. FastAPI Application Setup ---
 rag_service = RAGService(settings)
@@ -227,8 +275,16 @@ rag_service = RAGService(settings)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application startup...")
-    rag_service.initialize()
+
+    try:
+        rag_service.initialize()
+        logger.info("RAG service initialized successfully.")
+    except Exception as e:
+        logger.critical(f"FATAL: RAG service initialization failed. Error: {e}")
+        raise
+
     yield
+
     logger.info("Application shutdown.")
 
 app = FastAPI(
@@ -244,15 +300,15 @@ app.add_middleware(
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-# --- 5. API Endpoints ---
 @app.get("/", summary="Root endpoint")
 async def root():
     return {"message": f"{settings.APP_TITLE} is running."}
 
 @app.post("/query/", response_model=QueryResponse, summary="Query the knowledge base")
 async def query_kb(request: QueryRequest):
-    """
-    Accepts a user query and returns a synthesized answer.
-    The response body includes a separate list of source documents used to generate the answer.
-    """
-    return rag_service.query(request)
+    try:
+        result = rag_service.query(request)
+        return result
+    except Exception as e:
+        logger.error(f"Error handling the query: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal Server Error")

@@ -35,7 +35,7 @@ echo "Apptaining from main.sh"
 
 # Comment this out if you don't want to build the sif
  
-   #apptainer build -F --nv $SIF_NAME $SIF_DEF
+#   apptainer build -F --nv $SIF_NAME $SIF_DEF
 
 module load devel
 module load cuda

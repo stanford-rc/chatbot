@@ -4,10 +4,11 @@ from: python:3.12
 
 %files
 
-    sherlock/   sherlock
-    farmshare/  farmshare
-    oak/    oak
-    elm/    elm
+%files
+    sherlock/    sherlock
+    farmshare/   farmshare
+    oak/         oak
+    elm/         elm
     .langchain.db
     requirements.txt
 
