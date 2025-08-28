@@ -3,7 +3,6 @@
 # Variables
 SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
-MODEL_PATH="/oak/stanford/groups/ruthm/bcritt/.cache/huggingface/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/0d4b76e1efeb5eb6f6b5e757c79870472e04bd3a" #switch to mistral_inference
 MODEL_PATH="/oak/stanford/groups/ruthm/bcritt/.cache/huggingface/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
 DATABASE_FILE=".langchain.db"
 URL_MAP_PATH="/scratch/groups/bprogers/bcritt/url_map.txt"
@@ -36,7 +35,7 @@ echo "Apptaining from main.sh"
 
 # Comment this out if you don't want to build the sif
  
-   #apptainer build -F --nv $SIF_NAME $SIF_DEF
+#   apptainer build -F --nv $SIF_NAME $SIF_DEF
 
 module load devel
 module load cuda
