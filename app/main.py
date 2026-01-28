@@ -7,8 +7,8 @@ from typing import Dict, List, Optional
 import frontmatter
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from langchain.docstore.document import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.cache import SQLiteCache
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.globals import set_llm_cache
@@ -20,11 +20,7 @@ from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 import torch
-from mistral_inference.transformer import Transformer
-from mistral_inference.generate import generate
-from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
-from mistral_common.protocol.instruct.messages import UserMessage
-from mistral_common.protocol.instruct.request import ChatCompletionRequest
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # --- 1. Configuration Management ---
 
@@ -36,8 +32,8 @@ class Settings(BaseSettings):
     APP_TITLE: str = "SRC Cluster Knowledge Base API"
     APP_DESCRIPTION: str = "An API to query documentation about Stanford's high-performance computing clusters."
     APP_VERSION: str = "1.0.0"
-    MODEL_PATH: str = Field(..., env="MODEL_PATH")
-    CLUSTERS: Dict[str, str] = {"sherlock": "sherlock/", "farmshare": "farmshare/", "oak": "oak/", "elm": "elm/"}
+    MODEL_PATH: str = Field(default="/srv/scratch/bcritt/chatbot2/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659", env="MODEL_PATH")
+    CLUSTERS: Dict[str, str] = {"sherlock": "docs/sherlock/", "farmshare": "docs/farmshare/", "oak": "docs/oak/", "elm": "docs/elm/"}
     CORS_ORIGINS: List[str] = ['http://localhost:5000', 'http://127.0.0.1:5000']
     class Config:
         env_file = ".env"
@@ -95,34 +91,29 @@ class RAGService:
 
         try:
             logger.info(f"Loading model from {self.settings.MODEL_PATH}...")
-            tokenizer = MistralTokenizer.from_file(f"{self.settings.MODEL_PATH}/tokenizer.model.v3")
             
+            # Determine device and dtype
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            logger.info("Using Device: %s", device)
+            torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            logger.info("Using Device: %s, dtype: %s", device, torch_dtype)
             
-            model = Transformer.from_folder(self.settings.MODEL_PATH, device=device)
+            # Load tokenizer from local directory with local_files_only
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.settings.MODEL_PATH,
+                local_files_only=True
+            )
             
-            if torch.cuda.is_available():
-                cuda_capability = torch.cuda.get_device_capability(0)[0]
-                torch_dtype = torch.float16 if cuda_capability >= 8 else torch.float32
-                model = model.to(dtype=torch_dtype)
-                logger.info("Model is using torch_dtype: %s", torch_dtype)
-            else:
-                torch_dtype = torch.float32
+            # Load model with automatic device placement
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.settings.MODEL_PATH,
+                torch_dtype=torch_dtype,
+                device_map="auto" if torch.cuda.is_available() else None,
+                local_files_only=True
+            )
             
-            self.tokenizer = tokenizer
-            self.model = model
-            
-            self.llm = RunnableLambda(self.mistral_runnable_llm)
+            self.llm = RunnableLambda(self.llama_runnable_llm)
             
             logger.info("Model and tokenizer loaded successfully.")
-        except RuntimeError as e:
-            logger.error(f"CUDA error occurred: {e}, switching to CPU.")
-            device = 'cpu'
-            model = Transformer.from_folder(self.settings.MODEL_PATH, device=device)
-            torch_dtype = torch.float32
-            self.tokenizer = tokenizer
-            self.model = model
         except Exception as e:
             logger.critical(f"FATAL: Could not load the model. Error: {e}")
             raise
@@ -180,38 +171,65 @@ USER QUERY:
         )
         logger.info("RAG service initialization complete.")
 
-    def mistral_runnable_llm(self, inputs: Dict) -> str:
+    def llama_runnable_llm(self, inputs: Dict) -> str:
         try:
-            logger.info(f"mistral_runnable_llm received inputs: {inputs}")
+            logger.info(f"llama_runnable_llm received inputs: {inputs}")
             query = str(inputs)
-            completion_request = ChatCompletionRequest(messages=[UserMessage(content=query)])
-            tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
-
-            out_tokens, _ = generate(
-                [tokens], self.model, max_tokens=264, temperature=0.0, eos_id=self.tokenizer.instruct_tokenizer.tokenizer.eos_id
+            
+            # Use Llama 3.1's chat template
+            messages = [{"role": "user", "content": query}]
+            prompt = self.tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=True
             )
-            result = self.tokenizer.instruct_tokenizer.tokenizer.decode(out_tokens[0])
-
-            return result
+            
+            # Tokenize and move to device
+            inputs_encoded = self.tokenizer(prompt, return_tensors="pt")
+            if torch.cuda.is_available():
+                inputs_encoded = inputs_encoded.to("cuda")
+            
+            # Generate response
+            outputs = self.model.generate(
+                **inputs_encoded,
+                max_new_tokens=512,
+                temperature=0.1,
+                do_sample=True,
+                top_p=0.9,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            
+            # Decode only the new tokens (exclude the prompt)
+            response = self.tokenizer.decode(
+                outputs[0][inputs_encoded['input_ids'].shape[1]:],
+                skip_special_tokens=True
+            )
+            
+            return response
+            
         except RuntimeError as e:
-            logger.error(f"CUDA error occurred during inference: {e}, switching to CPU.")
-            # Perform inference with CPU fallback
-            result = self.perform_inference_cpu(query)
-            return result
+            # Catch CUDA errors and retry with reduced parameters
+            logger.error(f"CUDA error during inference: {e}, retrying with reduced tokens")
+            try:
+                outputs = self.model.generate(
+                    **inputs_encoded,
+                    max_new_tokens=256,  # Reduced
+                    temperature=0.1,
+                    do_sample=True,
+                    top_p=0.9,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
+                response = self.tokenizer.decode(
+                    outputs[0][inputs_encoded['input_ids'].shape[1]:],
+                    skip_special_tokens=True
+                )
+                return response
+            except Exception as retry_error:
+                logger.error(f"Retry failed: {retry_error}")
+                raise ValueError(f"LLM generation error after retry: {retry_error}")
         except Exception as e:
             logger.error(f"Error during LLM generation: {e}")
             raise ValueError(f"LLM generation error: {e}")
-
-    def perform_inference_cpu(self, query: str) -> str:
-        combined_prompt = f"{query}\\n\\nUser: {query}"
-        completion_request = ChatCompletionRequest(messages=[UserMessage(content=combined_prompt)])
-        tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
-        
-        out_tokens, _ = generate(
-            [tokens], self.model, max_tokens=64, temperature=0.0, eos_id=self.tokenizer.instruct_tokenizer.tokenizer.eos_id
-        )
-        result = self.tokenizer.instruct_tokenizer.tokenizer.decode(out_tokens[0])
-        return result
 
     def _identify_cluster(self, user_query: str) -> str:
         user_query_lower = user_query.lower()

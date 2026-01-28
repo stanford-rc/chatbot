@@ -3,9 +3,9 @@
 # Variables
 SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
-MODEL_PATH="/oak/stanford/groups/ruthm/bcritt/.cache/huggingface/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
+MODEL_PATH=".cache/huggingface/hub"
 DATABASE_FILE=".langchain.db"
-URL_MAP_PATH="/scratch/groups/bprogers/bcritt/url_map.txt"
+URL_MAP_PATH="docs/url_map.txt"
 
 # Remove Existing Singularity Images
 # if [ -f $SIF_NAME ]; then
@@ -21,35 +21,28 @@ if [ ! -f $DATABASE_FILE ]; then
     touch $DATABASE_FILE
 fi
 
-# Verify Model Path Exists with Correct Permissions
-echo "Ensuring the model path exists"
-if [ ! -d $MODEL_PATH ]; then
-    echo "Model path does not exist: $MODEL_PATH"
-    exit 1
+# Verify Model Path or use HuggingFace download
+if [ -d "$MODEL_PATH" ]; then
+    echo "Using local model at: $MODEL_PATH"
+else
+    echo "Local model not found at: $MODEL_PATH"
+    echo "Model will download from HuggingFace using MODEL_PATH ID"
 fi
 
+echo "Refreshing documentation repositories..."
+bash filemagic.sh
 
-# source filemagic.sh
+# Uncomment these if you want to verify cuda/pytorch works:
+# apptainer exec --nv $SIF_NAME python3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+# apptainer exec --nv $SIF_NAME python3 -c "import transformers; print(transformers.__version__)"
 
-echo "Apptaining from main.sh"
+# Start chatbot instance WITH docs bind mount
+echo "Starting chatbot instance..."
+apptainer instance start \
+    --nv \
+    --bind "$PWD:$PWD" \
+    $SIF_NAME chatapi
 
-# Comment this out if you don't want to build the sif
- 
-#   apptainer build -F --nv $SIF_NAME $SIF_DEF
-
-module load devel
-module load cuda
-
-
-apptainer exec --nv $SIF_NAME python3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_arch_list()); torch.zeros(1).to('cuda')"
-
-
-apptainer exec --nv $SIF_NAME python3 -c "import transformers; print(transformers.__version__)"
-
-apptainer instance start  --nv $SIF_NAME chatapi
-
-#apptainer exec --nv instance://chatapi python3 chat.py
+# Run your FastAPI app
+echo "Starting FastAPI server..."
 apptainer exec --nv instance://chatapi uvicorn app.main:app --reload --reload-dir app
-#apptainer exec instance://chatapi fastapi run 
-#apptainer exec instance://chatapi uvicorn robotchat:app
-

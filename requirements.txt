@@ -1,5 +1,5 @@
 # requirements.txt
-mistral_inference
+#mistral_inference brings in xformers which whose wheels fail on ARM
 fastapi
 uvicorn[standard]
 pydantic-settings
@@ -8,7 +8,7 @@ torch
 transformers
 accelerate
 bitsandbytes
-langchain
+langchain>=1.2.7
 langchain-community
 langchain-huggingface
 langchain-core
