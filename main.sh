@@ -3,9 +3,14 @@
 # Variables
 SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
-MODEL_PATH=".cache/huggingface/hub"
 DATABASE_FILE=".langchain.db"
 URL_MAP_PATH="docs/url_map.txt"
+
+# Read MODEL_PATH from centralized config.yaml
+# This ensures all components use the same model configuration
+MODEL_PATH=$(python3 -c "import yaml; config = yaml.safe_load(open('config.yaml')); print(config['model']['path'])")
+
+echo "Using model from config.yaml: $MODEL_PATH"
 
 # Remove Existing Singularity Images
 # if [ -f $SIF_NAME ]; then
@@ -45,4 +50,4 @@ apptainer instance start \
 
 # Run your FastAPI app
 echo "Starting FastAPI server..."
-apptainer exec --nv instance://chatapi uvicorn app.main:app --reload --reload-dir app
+apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/uvicorn app.main:app --reload --reload-dir app

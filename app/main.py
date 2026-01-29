@@ -20,7 +20,8 @@ from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import yaml
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 # --- 1. Configuration Management ---
 
@@ -28,13 +29,26 @@ logging.basicConfig(level=logging.INFO, filename='myapp.log', format='%(asctime)
 logger = logging.getLogger(__name__)
 load_dotenv()
 
+# Load centralized configuration
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+config = load_config()
+
 class Settings(BaseSettings):
-    APP_TITLE: str = "SRC Cluster Knowledge Base API"
-    APP_DESCRIPTION: str = "An API to query documentation about Stanford's high-performance computing clusters."
-    APP_VERSION: str = "1.0.0"
-    MODEL_PATH: str = Field(default="/srv/scratch/bcritt/chatbot2/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659", env="MODEL_PATH")
-    CLUSTERS: Dict[str, str] = {"sherlock": "docs/sherlock/", "farmshare": "docs/farmshare/", "oak": "docs/oak/", "elm": "docs/elm/"}
-    CORS_ORIGINS: List[str] = ['http://localhost:5000', 'http://127.0.0.1:5000']
+    APP_TITLE: str = config['app']['title']
+    APP_DESCRIPTION: str = config['app']['description']
+    APP_VERSION: str = config['app']['version']
+    MODEL_PATH: str = Field(default=config['model']['path'], env="MODEL_PATH")
+    MODEL_TYPE: str = config['model']['type']
+    MODEL_DEVICE: str = config['model']['device']
+    USE_QUANTIZATION: bool = config['model']['use_quantization']
+    LOCAL_FILES_ONLY: bool = config['model']['local_files_only']
+    MAX_NEW_TOKENS: int = config['generation']['max_new_tokens']
+    CLUSTERS: Dict[str, str] = config['clusters']
+    CORS_ORIGINS: List[str] = config['api']['cors_origins']
     class Config:
         env_file = ".env"
         env_file_encoding = 'utf-8'
@@ -91,25 +105,49 @@ class RAGService:
 
         try:
             logger.info(f"Loading model from {self.settings.MODEL_PATH}...")
+            logger.info(f"Model type: {self.settings.MODEL_TYPE}, Device: {self.settings.MODEL_DEVICE}, Quantization: {self.settings.USE_QUANTIZATION}")
             
             # Determine device and dtype
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
             logger.info("Using Device: %s, dtype: %s", device, torch_dtype)
             
-            # Load tokenizer from local directory with local_files_only
+            # Load tokenizer from local directory
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.settings.MODEL_PATH,
-                local_files_only=True
-            )
+                local_files_only=self.settings.LOCAL_FILES_ONLY
+	    )
+            self.tokenizer.pad_token = self.tokenizer.eos_token
             
-            # Load model with automatic device placement
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.settings.MODEL_PATH,
-                torch_dtype=torch_dtype,
-                device_map="auto" if torch.cuda.is_available() else None,
-                local_files_only=True
-            )
+            # Load model - FP16 without quantization for ARM compatibility
+            if self.settings.USE_QUANTIZATION:
+                logger.warning("Quantization enabled - may cause slowdown on ARM architecture")
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.settings.MODEL_PATH,
+                    quantization_config=bnb_config,
+                    device_map="auto" if torch.cuda.is_available() else None,
+                    local_files_only=self.settings.LOCAL_FILES_ONLY,
+                    torch_dtype=torch.float16,
+                )
+            else:
+                logger.info("Loading model in FP16 (recommended for ARM)")
+                # Use config device instead of device_map='auto' to avoid multi-GPU overhead
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.settings.MODEL_PATH,
+                    torch_dtype=torch_dtype,
+                    local_files_only=self.settings.LOCAL_FILES_ONLY
+                )
+                if torch.cuda.is_available():
+                    self.model = self.model.to(self.settings.MODEL_DEVICE)
+                    logger.info(f"Model moved to {self.settings.MODEL_DEVICE}")
+
+            self.model.eval()  # Set to inference mode
             
             self.llm = RunnableLambda(self.llama_runnable_llm)
             
@@ -134,8 +172,10 @@ class RAGService:
             self.retrievers[cluster_name] = BM25Retriever.from_documents(split_docs)
             logger.info(f"Created retriever for '{cluster_name}'.")
 
-        prompt_template = ChatPromptTemplate.from_template(
-            """<s>[INST] You are an expert assistant for the Stanford Research Computing Center (SRCC).
+        # Adjust prompt template based on model type
+        if self.settings.MODEL_TYPE == "llama":
+            prompt_template = ChatPromptTemplate.from_template(
+                """<s>[INST] You are an expert assistant for the Stanford Research Computing Center (SRCC).
 Your task is to answer the user's query based ONLY on the provided documentation context.
 - Your answer must be grounded in the facts from the CONTEXT below.
 - Determine which cluster documentation to consult based on the user's input. If they don't supply an identifiable cluster, you may ask for more information. 
@@ -148,12 +188,30 @@ CONTEXT:
 
 USER QUERY:
 {query} [/INST]"""
-        )
+            )
+        else:
+            # Gemma and other models - simpler prompt
+            prompt_template = ChatPromptTemplate.from_template(
+                """You are an expert assistant for the Stanford Research Computing Center (SRCC).
+Your task is to answer the user's query based ONLY on the provided documentation context.
+- Your answer must be grounded in the facts from the CONTEXT below.
+- Determine which cluster documentation to consult based on the user's input. If they don't supply an identifiable cluster, you may ask for more information. 
+- If the context does not contain the answer, state that you could not find the information and refer the user to srcc-support@stanford.edu.
+- Do not reference any specific documents by their filenames. If you must refer to a file, look up the title in the file's metadata.
+- Answer ONLY the user's query. Do not add any extra information, questions, or conversational text after the answer is complete.
+- Prioritize bulleted steps for the practical completion of a user's task.
+CONTEXT:
+{context}
+
+USER QUERY:
+{query}"""
+            )
 
         def retrieve_and_format_context(inputs: Dict) -> str:
             query, cluster = inputs['query'], inputs['cluster']
             retriever = self.retrievers[cluster]
             retrieved_docs = retriever.invoke(query)
+            retrieved_docs = retrieved_docs[:5]
             inputs['retrieved_docs'] = retrieved_docs
             if not retrieved_docs:
                 return "No relevant documents were found."
@@ -174,30 +232,45 @@ USER QUERY:
     def llama_runnable_llm(self, inputs: Dict) -> str:
         try:
             logger.info(f"llama_runnable_llm received inputs: {inputs}")
-            query = str(inputs)
+            # Extract content from LangChain message object
+            if isinstance(inputs, dict) and 'messages' in inputs:
+                query = inputs['messages'][0].content
+            else:
+                query = str(inputs)
             
-            # Use Llama 3.1's chat template
-            messages = [{"role": "user", "content": query}]
-            prompt = self.tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
+            # Format prompt based on model type
+            if self.settings.MODEL_TYPE == "gemma":
+                # Gemma uses simple tokenization without chat template
+                inputs_encoded = self.tokenizer(query, return_tensors="pt")
+            elif self.settings.MODEL_TYPE in ["llama", "tinyllama"]:
+                # Llama models use chat template
+                messages = [{"role": "user", "content": query}]
+                prompt = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
+                inputs_encoded = self.tokenizer(prompt, return_tensors="pt")
+            else:
+                # Default: simple tokenization
+                inputs_encoded = self.tokenizer(query, return_tensors="pt")
             
-            # Tokenize and move to device
-            inputs_encoded = self.tokenizer(prompt, return_tensors="pt")
             if torch.cuda.is_available():
-                inputs_encoded = inputs_encoded.to("cuda")
+                inputs_encoded = inputs_encoded.to(self.settings.MODEL_DEVICE)
             
-            # Generate response
-            outputs = self.model.generate(
-                **inputs_encoded,
-                max_new_tokens=512,
-                temperature=0.1,
-                do_sample=True,
-                top_p=0.9,
-                pad_token_id=self.tokenizer.eos_token_id
-            )
+            # Generate response with optimized parameters
+            logger.info("Starting model generation...")
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs_encoded,
+                    max_new_tokens=self.settings.MAX_NEW_TOKENS,
+                    do_sample=False,
+                    num_beams=1,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True,
+                )
+            logger.info(f"Generation complete. Tokens generated: {outputs.shape[1] - inputs_encoded['input_ids'].shape[1]}")
             
             # Decode only the new tokens (exclude the prompt)
             response = self.tokenizer.decode(
@@ -207,26 +280,6 @@ USER QUERY:
             
             return response
             
-        except RuntimeError as e:
-            # Catch CUDA errors and retry with reduced parameters
-            logger.error(f"CUDA error during inference: {e}, retrying with reduced tokens")
-            try:
-                outputs = self.model.generate(
-                    **inputs_encoded,
-                    max_new_tokens=256,  # Reduced
-                    temperature=0.1,
-                    do_sample=True,
-                    top_p=0.9,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-                response = self.tokenizer.decode(
-                    outputs[0][inputs_encoded['input_ids'].shape[1]:],
-                    skip_special_tokens=True
-                )
-                return response
-            except Exception as retry_error:
-                logger.error(f"Retry failed: {retry_error}")
-                raise ValueError(f"LLM generation error after retry: {retry_error}")
         except Exception as e:
             logger.error(f"Error during LLM generation: {e}")
             raise ValueError(f"LLM generation error: {e}")

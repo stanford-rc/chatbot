@@ -5,9 +5,9 @@ uvicorn[standard]
 pydantic-settings
 python-dotenv
 torch
-transformers
+transformers>=4.36.0
 accelerate
-bitsandbytes
+bitsandbytes>=0.41.0
 langchain>=1.2.7
 langchain-community
 langchain-huggingface
