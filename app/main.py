@@ -43,7 +43,8 @@ class Settings(BaseSettings):
     APP_VERSION: str = config['app']['version']
     MODEL_PATH: str = Field(default=config['model']['path'], env="MODEL_PATH")
     MODEL_TYPE: str = config['model']['type']
-    MODEL_DEVICE: str = config['model']['device']
+    # WORKER_GPU env var overrides config for multi-worker (Python 3.14 Pydantic compat issue)
+    MODEL_DEVICE: str = os.environ.get('WORKER_GPU', config['model']['device'])
     USE_QUANTIZATION: bool = config['model']['use_quantization']
     LOCAL_FILES_ONLY: bool = config['model']['local_files_only']
     MAX_NEW_TOKENS: int = config['generation']['max_new_tokens']
@@ -144,6 +145,8 @@ class RAGService:
                     local_files_only=self.settings.LOCAL_FILES_ONLY
                 )
                 if torch.cuda.is_available():
+                    logger.info(f"Loading model to device: {self.settings.MODEL_DEVICE}")
+                    logger.info(f"WORKER_GPU env var: {os.environ.get('WORKER_GPU', 'NOT SET')}")
                     self.model = self.model.to(self.settings.MODEL_DEVICE)
                     logger.info(f"Model moved to {self.settings.MODEL_DEVICE}")
 

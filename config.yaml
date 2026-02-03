@@ -3,6 +3,7 @@
 # Edit this file to change models - all other files will read from here
 
 # Model Configuration
+model:
   # HuggingFace hub local path (relative to project root)
   # Examples:
   #   - ".cache/huggingface/hub/models--google--gemma-2-9b-it/snapshots/11c9b309abf73637e4b6f9a3fa1e92e615547819"
