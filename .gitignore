@@ -9,6 +9,8 @@ sherlock/
 elm/
 farmshare/
 oak/
+.cache/
+.venv/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -23,6 +23,9 @@ import torch
 import yaml
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
+# Semantic caching
+from app.semantic_cache import SemanticResponseCache
+
 # --- 1. Configuration Management ---
 
 logging.basicConfig(level=logging.INFO, filename='myapp.log', format='%(asctime)s - %(levelname)s - %(message)s')
@@ -79,6 +82,7 @@ class RAGService:
         self.llm = None
         self.retrievers: Dict[str, BM25Retriever] = {}
         self.chain = None
+        self.semantic_cache = None  # Initialized in initialize()
 
     def _ingest_markdown_files(self, corpus_dir: str) -> List[Document]:
         documents = []
@@ -103,6 +107,18 @@ class RAGService:
             logger.info("LangChain LLM cache enabled with SQLite.")
         except Exception as e:
             logger.error(f"Could not set up LLM cache: {e}")
+        
+        # Initialize semantic response cache
+        try:
+            self.semantic_cache = SemanticResponseCache(
+                db_path=".response_cache.db",
+                similarity_threshold=0.95
+            )
+            logger.info("✓ Semantic cache initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize semantic cache: {e}")
+            self.semantic_cache = None
+
 
         try:
             logger.info(f"Loading model from {self.settings.MODEL_PATH}...")
@@ -294,6 +310,25 @@ USER QUERY:
                 return cluster_name
         return "unknown"
 
+    def _format_sources(self, documents: List[Document]) -> List[Source]:
+        """
+        Format documents into Source objects with titles and URLs.
+        Extracts URL from document metadata (added by file_magic.py).
+        """
+        sources = []
+        seen_titles = set()
+        
+        for doc in documents:
+            title = doc.metadata.get('title', 'Unknown')
+            url = doc.metadata.get('url', None)  # Extract URL from frontmatter
+            
+            # Avoid duplicate sources with same title
+            if title not in seen_titles:
+                sources.append(Source(title=title, url=url))
+                seen_titles.add(title)
+        
+        return sources
+
     def query(self, request: QueryRequest) -> QueryResponse:
         """Processes a user query, returning a clean answer and a separate list of sources."""
         if not self.chain or not self.retrievers:
@@ -309,6 +344,12 @@ USER QUERY:
                 sources=[]
             )
         
+        # Check semantic cache first
+        if self.semantic_cache:
+            cached_response = self.semantic_cache.get(request.query, cluster)
+            if cached_response:
+                return QueryResponse(**cached_response)
+        
         logger.info(f"Processing query for cluster '{cluster}': '{request.query[:100]}...'")
 
         chain_input = {"query": request.query, "cluster": cluster, "retrieved_docs": []}
@@ -321,27 +362,47 @@ USER QUERY:
             logger.error(f"Error during RAG chain invocation: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to generate a response from the model.")
 
+        # Extract cited filenames from the LLM's answer
         cited_filenames = set(re.findall(r'\[\s*([^\]]+)\]', llm_answer_with_placeholders))
-        metadata_lookup: Dict[str, Dict] = {
-            doc.metadata['source']: doc.metadata
-            for doc in retrieved_docs if 'source' in doc.metadata
-        } 
-
-        source_objects = []
-        for filename in sorted(list(cited_filenames)):
-            if filename in metadata_lookup:
-                metadata = metadata_lookup[filename]
-                title = metadata.get('title', filename)
-                url = metadata.get('url')
-                source_objects.append(Source(title=title, url=url))
         
-        final_answer = re.sub(r'\s*\[source:\s*[^\]]+\]', '', llm_answer_with_placeholders).strip()
+        # Filter retrieved_docs to only include those that were cited
+        cited_docs = [
+            doc for doc in retrieved_docs 
+            if 'source' in doc.metadata and doc.metadata['source'] in cited_filenames
+        ]
+        
+        # Format retrieved documents into Source objects (with URLs from metadata)
+        source_objects = self._format_sources(retrieved_docs)
+        
+        # Clean up any stray brackets in the answer
+        final_answer = re.sub(r'\s*\[[^\]]+\]', '', llm_answer_with_placeholders).strip()
+        
+        # Append source URLs as markdown reference list
+        if source_objects:
+            source_list = "\n\n📚 **Sources:**\n" + "\n".join(
+                f"- [{src.title}]({src.url})" if src.url else f"- {src.title}"
+                for src in source_objects
+            )
+            final_answer = final_answer + source_list
 
-        return QueryResponse(
+        response = QueryResponse(
             answer=final_answer,
             cluster=cluster,
             sources=source_objects
         )
+        
+        # Cache the response for future similar queries
+        if self.semantic_cache:
+            try:
+                self.semantic_cache.set(
+                    request.query,
+                    cluster,
+                    response.model_dump()
+                )
+            except Exception as e:
+                logger.error(f"Failed to cache response: {e}")
+        
+        return response
 
 # --- 4. FastAPI Application Setup ---
 rag_service = RAGService(settings)
