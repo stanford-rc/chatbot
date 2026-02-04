@@ -29,7 +29,7 @@ model:
 
 # Generation Parameters
 generation:
-  max_new_tokens: 256
+  max_new_tokens: 128
   do_sample: false  # Greedy decoding for speed
   num_beams: 1      # No beam search
   temperature: null # Disabled for greedy
@@ -45,6 +45,39 @@ api:
   cors_origins:
     - "http://localhost:5000"
     - "http://127.0.0.1:5000"
+
+  # Each cluster has docs in a separate directory
+  CLUSTERS:
+    sherlock: "sherlock"
+    farmshare: "farmshare"
+    oak: "oak"
+    elm: "elm"
+
+# Caching Configuration
+caching:
+  # Enable semantic response caching (requires sentence-transformers)
+  SEMANTIC_CACHE_ENABLED: true
+  
+  # Similarity threshold for semantic cache hits (0.0-1.0)
+  # Lower = more permissive (e.g., 0.70 catches similar phrasings)
+  # Higher = stricter (e.g., 0.95 only near-identical questions)
+  # Recommended: 0.70-0.75 for good semantic matching
+  SEMANTIC_CACHE_THRESHOLD: 0.70
+  
+  # Cache database file path
+  SEMANTIC_CACHE_DB: ".response_cache.db"
+  
+  # LangChain LLM cache database
+  LANGCHAIN_CACHE_DB: ".langchain.db"
+
+# Retrieval Configuration  
+retrieval:
+  # Maximum number of documents to retrieve per query
+  MAX_RETRIEVED_DOCS: 5
+  
+  # BM25 parameters (optional tuning)
+  # BM25_K1: 1.5
+  # BM25_B: 0.75
 
 # Cluster Documentation Paths
 clusters:

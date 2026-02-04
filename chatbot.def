@@ -6,7 +6,6 @@ from: ubuntu:24.04
     docs/farmshare/   farmshare
     docs/oak/         oak
     docs/elm/         elm
-    .langchain.db
     requirements.txt
     
 %environment
