@@ -1,0 +1,87 @@
+# Chatbot Configuration
+# Central configuration file for model and application settings
+# Edit this file to change models - all other files will read from here
+
+# Model Configuration
+model:
+  # HuggingFace hub local path (relative to project root)
+  # Examples:
+  #   - ".cache/huggingface/hub/models--google--gemma-2-9b-it/snapshots/11c9b309abf73637e4b6f9a3fa1e92e615547819"
+  path: ".cache/huggingface/hub/models--google--gemma-2-9b-it/snapshots/11c9b309abf73637e4b6f9a3fa1e92e615547819"
+  
+  # Model type - affects prompt formatting
+  # Options: "gemma", "llama", "tinyllama"
+  # Marginally changes prompt format
+  type: "gemma"
+  
+  # GPU device selection
+  # Options: "cuda:0" (single GPU), "auto" (multi-GPU), "cuda" (default GPU)
+  # For models <10B, use "cuda:0" to avoid multi-GPU overhead
+  # For models >30B, use "auto" to split across GPUs
+  device: "cuda:0"
+  
+  # Use local files only (no HuggingFace downloads)
+  local_files_only: true
+  
+  # Use 4-bit quantization (NOT recommended for ARM - causes slowdown)
+  # Set to false for faster inference on ARM architecture
+  use_quantization: false
+
+# Generation Parameters
+generation:
+  max_new_tokens: 128
+  do_sample: false  # Greedy decoding for speed
+  num_beams: 1      # No beam search
+  temperature: null # Disabled for greedy
+
+# Application Settings
+app:
+  title: "SRC Cluster Knowledge Base API"
+  description: "An API to query documentation about Stanford's high-performance computing clusters."
+  version: "1.0.0"
+  
+# API Settings
+api:
+  cors_origins:
+    - "http://localhost:5000"
+    - "http://127.0.0.1:5000"
+
+  # Each cluster has docs in a separate directory
+  CLUSTERS:
+    sherlock: "sherlock"
+    farmshare: "farmshare"
+    oak: "oak"
+    elm: "elm"
+
+# Caching Configuration
+caching:
+  # Enable semantic response caching (requires sentence-transformers)
+  SEMANTIC_CACHE_ENABLED: true
+  
+  # Similarity threshold for semantic cache hits (0.0-1.0)
+  # Lower = more permissive (e.g., 0.70 catches similar phrasings)
+  # Higher = stricter (e.g., 0.95 only near-identical questions)
+  # Recommended: 0.70-0.75 for good semantic matching
+  SEMANTIC_CACHE_THRESHOLD: 0.70
+  
+  # Cache database file path
+  SEMANTIC_CACHE_DB: ".response_cache.db"
+  
+  # LangChain LLM cache database
+  LANGCHAIN_CACHE_DB: ".langchain.db"
+
+# Retrieval Configuration  
+retrieval:
+  # Maximum number of documents to retrieve per query
+  MAX_RETRIEVED_DOCS: 5
+  
+  # BM25 parameters (optional tuning)
+  # BM25_K1: 1.5
+  # BM25_B: 0.75
+
+# Cluster Documentation Paths
+clusters:
+  sherlock: "docs/sherlock/"
+  farmshare: "docs/farmshare/"
+  oak: "docs/oak/"
+  elm: "docs/elm/"

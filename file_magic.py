@@ -31,19 +31,19 @@ def process_markdown_file(file_path):
 # To add a new repository, simply add a new dictionary to the SOURCES list.
 SOURCES = [
     {
-        "repo_url": "git@github.com:stanford-rc/farmshare-docs.git",
+        "repo_url": "https://github.com/stanford-rc/farmshare-docs.git",
         "repo_name": "farmshare",  # A short name for creating directories
     },
     {
-        "repo_url": "git@github.com:stanford-rc/docs.elm.stanford.edu.git",
+        "repo_url": "https://github.com/stanford-rc/docs.elm.stanford.edu.git",
         "repo_name": "elm",  # A short name for creating directories
     },
      {
-        "repo_url": "git@github.com:stanford-rc/docs.oak.stanford.edu.git",
+        "repo_url": "https://github.com/stanford-rc/docs.oak.stanford.edu.git",
         "repo_name": "oak",  # A short name for creating directories
     },   
     {
-        "repo_url": "git@github.com:stanford-rc/www.sherlock.stanford.edu.git",
+        "repo_url": "https://github.com/stanford-rc/www.sherlock.stanford.edu.git",
         "repo_name": "sherlock",  # A short name for creating directories
         "scraper_targets": [
             {
@@ -107,7 +107,16 @@ TolerantSafeLoader.add_multi_constructor('tag:yaml.org,2002:python', ignore_and_
 
 def clone_repo(repo_url: str, local_path: Path):
     """Clones a GitHub repository, ensuring a fresh start."""
-    logging.info(f"Cloning repository: {repo_url} into {local_path}")
+    # Check for GitHub token for authenticated HTTPS cloning
+    github_token = os.getenv("GITHUB_TOKEN")
+    clone_url = repo_url
+    
+    if github_token and repo_url.startswith("https://github.com/"):
+        # Inject token into URL: https://TOKEN@github.com/...
+        clone_url = repo_url.replace("https://github.com/", f"https://{github_token}@github.com/")
+        logging.info(f"Using authenticated clone for: {repo_url}")
+    else:
+        logging.info(f"Cloning repository: {repo_url} into {local_path}")
     if local_path.exists():
         logging.info(f"Removing existing directory: {local_path}")
         shutil.rmtree(local_path)
@@ -251,15 +260,18 @@ def process_repository(config: dict):
     repo_url = config["repo_url"]
     repo_name = config["repo_name"]
     scraper_targets = config.get("scraper_targets", [])
+    BASE_DIR = Path(os.getenv("REPO_CLONE_DIR", "docs"))
 
     print(f"\n{'='*20} Processing Repository: {repo_name} {'='*20}")
     logging.info(f"Starting processing for repository: {repo_url}")
 
     # Define dynamic paths based on repo_name
-    local_repo_path = Path(f"temp_repo_{repo_name}")
-    flat_output_dir = Path(f"{repo_name}")
-    output_csv_file = Path(f"{repo_name}_url_map.csv")
-
+    local_repo_path = BASE_DIR / f"temp_repo_{repo_name}"
+    flat_output_dir = BASE_DIR / repo_name
+    output_csv_file = BASE_DIR / f"{repo_name}_url_map.csv"
+    
+    # Ensure base directory exists
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         clone_repo(repo_url, local_repo_path)
     except Exception:

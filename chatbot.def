@@ -1,34 +1,49 @@
 bootstrap: docker
-from: nvcr.io/nvidia/pytorch:22.03-py3
-from: python:3.12
+from: ubuntu:24.04
 
 %files
-
-%files
-    sherlock/    sherlock
-    farmshare/   farmshare
-    oak/         oak
-    elm/         elm
-    .langchain.db
+    docs/sherlock/    sherlock
+    docs/farmshare/   farmshare
+    docs/oak/         oak
+    docs/elm/         elm
     requirements.txt
-
-    
     
 %environment
-    # set up environment for when using the container
-    # . /opt/conda/etc/profile.d/conda.sh
-    # conda activate torch
-    
+    export PATH=/usr/local/cuda/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
     
 %post
-    python3 --version
+    apt update && apt -y full-upgrade
 
-    pip install --upgrade pip
-        # Update and install dependencies
-    apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libglib2.0-0 libxext6 libsm6 libxrender1 \
-        git wget curl ca-certificates && \
-        apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt install -y --no-install-recommends \
+        git build-essential \
+        wget curl ca-certificates
 
-        pip install -r requirements.txt
+    # Install CUDA toolkit 13.0 for ARM64
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/cuda-keyring_1.1-1_all.deb
+    apt install ./cuda-keyring_1.1-1_all.deb
+    apt update && apt install -y --no-install-recommends cuda-toolkit-13-0
+
+    rm cuda-keyring_1.1-1_all.deb
+
+    apt -y autoremove && \
+    apt clean && rm -rf /var/lib/apt/lists/*
+
+    # Install UV package manager
+    export UV_INSTALL_DIR=/usr/local/bin
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    export CUDA_HOME=/usr/local/cuda
+
+    # Create virtual environment and install PyTorch with CUDA support
+    uv venv --system-site-packages /opt/chatbot-env
+    . /opt/chatbot-env/bin/activate
+    uv pip install --torch-backend=cu130 --requirements requirements.txt
+    deactivate
+
+    uv cache clean
+
+%runscript
+    #!/bin/bash
+    . /opt/chatbot-env/bin/activate
+    exec "$@"

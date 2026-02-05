@@ -1,19 +1,21 @@
 # requirements.txt
-mistral_inference
+#mistral_inference brings in xformers which whose wheels fail on ARM
 fastapi
 uvicorn[standard]
 pydantic-settings
 python-dotenv
 torch
-transformers
+transformers>=4.36.0
 accelerate
-bitsandbytes
-langchain
+bitsandbytes>=0.41.0
+langchain>=1.2.7
 langchain-community
 langchain-huggingface
 langchain-core
 protobuf
 sentencepiece
+sentence-transformers
+numpy
 # For BM25Retriever
 rank_bm25
 python-frontmatter
