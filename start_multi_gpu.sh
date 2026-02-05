@@ -27,7 +27,7 @@ sleep 2
 # Start Worker 1 on GPU 0 (port 8001)
 echo "Starting Worker 1 (GPU 0) on port 8001..."
 APPTAINERENV_WORKER_GPU=cuda:0 apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/uvicorn app.main:app \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   --port 8001 \
   --log-level warning &
 
@@ -41,7 +41,7 @@ sleep 3
 # Start Worker 2 on GPU 1 (port 8002)
 echo "Starting Worker 2 (GPU 1) on port 8002..."
 APPTAINERENV_WORKER_GPU=cuda:1 apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/uvicorn app.main:app \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   --port 8002 \
   --log-level warning &
 
