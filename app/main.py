@@ -375,6 +375,12 @@ USER QUERY:
         chain_input = {"query": request.query, "cluster": cluster, "retrieved_docs": []}
         try:
             llm_answer_with_placeholders = self.chain.invoke(chain_input)
+            # Strip code block fences the model sometimes wraps its entire response in
+            llm_answer_with_placeholders = re.sub(r'^[\s]*```[^\n]*\n', '', llm_answer_with_placeholders)
+            llm_answer_with_placeholders = re.sub(r'\n```[\s]*$', '', llm_answer_with_placeholders)
+            # Replace literal \n text and real newlines with spaces
+            llm_answer_with_placeholders = llm_answer_with_placeholders.replace('\\n', ' ').replace('\n', ' ')
+            llm_answer_with_placeholders = llm_answer_with_placeholders.strip()
             logger.info(f"llm_answer_with_placeholders: {llm_answer_with_placeholders}")
             retrieved_docs = chain_input['retrieved_docs']
             logger.info(f"retrieved_docs: {retrieved_docs}")
@@ -393,6 +399,8 @@ USER QUERY:
         for doc in retrieved_docs:
             title = doc.metadata.get('title', 'Unknown')
             url = doc.metadata.get('url', None)
+            if url:
+                url = ''.join(url.split())  # Remove any embedded whitespace/newlines
             title_to_url[title] = url
             title_to_doc[title] = doc
         
@@ -410,10 +418,10 @@ USER QUERY:
         cited_docs = [title_to_doc[title] for title in cited_titles if title in title_to_doc]
         source_objects = self._format_sources(cited_docs) if cited_docs else []
         
-        # Append source URLs as markdown reference list
+        # Append source URLs inline (no newlines to keep output clean)
         if source_objects:
-            source_list = "\n\n📚 **Sources:**\n" + "\n".join(
-                f"- [{src.title}]({src.url})" if src.url else f"- {src.title}"
+            source_list = " 📚 **Sources:** " + " | ".join(
+                f"[{src.title}]({src.url})" if src.url else src.title
                 for src in source_objects
             )
             final_answer = final_answer + source_list
