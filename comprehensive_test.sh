@@ -16,7 +16,22 @@ echo ""
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+# Ask about cache
+SKIP_CACHE_TEST=false
+read -r -p "Clear semantic cache before testing? This will skip Test 3 (cache performance). [y/N] " cache_response
+if [[ "$cache_response" =~ ^[Yy]$ ]]; then
+  if [ -f .response_cache.db ]; then
+    rm .response_cache.db
+    echo -e "${GREEN}✓${NC} Semantic cache cleared"
+  else
+    echo "No cache file found, continuing"
+  fi
+  SKIP_CACHE_TEST=true
+fi
+echo ""
+
 
 # Test 1: Multi-GPU Load Balancing
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -104,6 +119,11 @@ echo "$sources" | sed 's/^/  - /'
 echo ""
 
 # Test 3: Semantic Caching Performance
+if [ "$SKIP_CACHE_TEST" = true ]; then
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo -e "TEST 3: Semantic Caching Performance ${YELLOW}[SKIPPED - cache was cleared]${NC}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+else
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "TEST 3: Semantic Caching Performance"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -193,6 +213,8 @@ if [ "$ans1" == "$ans4" ]; then
 else
   echo -e "${YELLOW}⚠${NC}  Semantic cache: Answers differ (might be below similarity threshold)"
 fi
+
+fi # end SKIP_CACHE_TEST check
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
