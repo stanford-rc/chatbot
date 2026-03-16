@@ -30,6 +30,7 @@ api:
     - "http://localhost:5000"
     - "http://127.0.0.1:5000"
     - "https://docs-dev.carina.stanford.edu"
+    - "https://ada-lovelace.stanford.edu"
 
   # Each cluster has docs in a separate directory
   CLUSTERS:

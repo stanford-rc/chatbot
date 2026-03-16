@@ -11,6 +11,9 @@ farmshare/
 oak/
 .cache/
 .venv/
+*.pid
+.*.pid
+models
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

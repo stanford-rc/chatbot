@@ -24,37 +24,44 @@ pkill -f "uvicorn app.main:app.*800[12]" || true
 pkill -f "load_balancer.py" || true
 sleep 2
 
-# Start Worker 1 on GPU 0 (port 8001)
+
+# Make sure logs directory exists
+mkdir -p logs
+
+# Start workers
 echo "Starting Worker 1 (GPU 0) on port 8001..."
-APPTAINERENV_WORKER_GPU=cuda:0 apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/uvicorn app.main:app \
+APPTAINERENV_WORKER_GPU=cuda:0 apptainer exec --nv instance://chatapi \
+  python3 -m uvicorn app.main:app \
   --host 127.0.0.1 \
   --port 8001 \
-  --log-level warning &
+  --log-level info > logs/worker1.log 2>&1 &
+
+echo "Starting Worker 2 (GPU 1) on port 8002..."
+APPTAINERENV_WORKER_GPU=cuda:1 apptainer exec --nv instance://chatapi \
+  python3 -m uvicorn app.main:app \
+  --host 127.0.0.1 \
+  --port 8002 \
+  --log-level info > logs/worker2.log 2>&1 &
 
 WORKER1_PID=$!
 echo $WORKER1_PID > .worker1.pid
 echo "  → Worker 1 PID: $WORKER1_PID"
 
-# Give first worker time to start
-sleep 3
-
-# Start Worker 2 on GPU 1 (port 8002)
-echo "Starting Worker 2 (GPU 1) on port 8002..."
-APPTAINERENV_WORKER_GPU=cuda:1 apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/uvicorn app.main:app \
-  --host 127.0.0.1 \
-  --port 8002 \
-  --log-level warning &
-
 WORKER2_PID=$!
 echo $WORKER2_PID > .worker2.pid
 echo "  → Worker 2 PID: $WORKER2_PID"
 
-# Give second worker time to start
-sleep 3
+# Wait for workers to be ready
+echo "Waiting for workers to initialize..."
+sleep 30  # Give workers time to load the model
 
-# Start Load Balancer on port 8000
-echo "Starting Load Balancer on port 8000..."
-apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/python load_balancer.py &
+# Start load balancer inside container
+echo "Starting load balancer on port 8000..."
+apptainer exec instance://chatapi \
+  python3 /workspace/load_balancer.py > logs/loadbalancer.log 2>&1 &
+
+
+
 
 LB_PID=$!
 echo $LB_PID > .loadbalancer.pid
@@ -84,3 +91,6 @@ echo "  ./stop_multi_gpu.sh"
 echo ""
 echo "Monitoring:"
 echo "  watch -n 1 'curl -s http://localhost:8000/stats | jq'"
+
+echo "All services started!"
+echo "Check logs/worker*.log and logs/loadbalancer.log for details"

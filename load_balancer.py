@@ -9,10 +9,12 @@ import logging
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, filename='load.log', format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 
 # Worker configuration
 WORKERS = [
@@ -43,6 +45,30 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# ADD CORS MIDDLEWARE HERE - BEFORE ROUTES
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+        "https://docs-dev.carina.stanford.edu",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+# Add this exception handler right after the middleware
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={
+            "Access-Control-Allow-Origin": "https://docs-dev.carina.stanford.edu",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
 
 async def get_available_worker():
     """Find first available worker, or None if all busy"""

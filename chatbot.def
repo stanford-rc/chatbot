@@ -7,6 +7,7 @@ from: python:3.11-slim
     docs/oak/         /workspace/oak
     docs/elm/         /workspace/elm
     requirements.txt  /workspace/requirements.txt
+    load_balancer.py  /workspace/load_balancer.py  # ADD THIS
 
 %post
     apt-get update && apt-get install -y \

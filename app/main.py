@@ -75,6 +75,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # --- 2. Pydantic Models for API ---
+logger.info("CORS_ORIGINS: %s", settings.CORS_ORIGINS)
 
 class QueryRequest(BaseModel):
     query: str
@@ -473,7 +474,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    # allow_origin_regex=r'https://.*\.stanford\.edu',  # Must be raw string
+    allow_credentials=True,  # Important for cookies/auth
+    expose_headers=["*"],   
+    allow_methods=["*"], 
+    allow_headers=["*"],
 )
 
 @app.get("/", summary="Root endpoint")
