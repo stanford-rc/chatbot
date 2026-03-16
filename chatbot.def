@@ -6,8 +6,9 @@ from: python:3.11-slim
     docs/farmshare/   /workspace/farmshare
     docs/oak/         /workspace/oak
     docs/elm/         /workspace/elm
+    app/              /workspace/app
     requirements.txt  /workspace/requirements.txt
-    load_balancer.py  /workspace/load_balancer.py  # ADD THIS
+    config.yaml       /workspace/config.yaml
 
 %post
     apt-get update && apt-get install -y \

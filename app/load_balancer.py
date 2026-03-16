@@ -12,9 +12,12 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-logging.basicConfig(level=logging.INFO, filename='load.log', format='%(asctime)s - %(levelname)s - %(message)s')
+from app.config import config  # Import config directly
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# No need to redefine load_config() - just use the imported config
 
 # Worker configuration
 WORKERS = [
@@ -35,6 +38,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Managing {len(WORKERS)} GPU workers")
     for worker in WORKERS:
         logger.info(f"  - {worker['url']} ({worker['gpu']})")
+    logger.info(f"CORS origins: {config['api']['cors_origins']}")
     yield
     logger.info("Load Balancer shutting down...")
 
@@ -45,30 +49,42 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ADD CORS MIDDLEWARE HERE - BEFORE ROUTES
+# Add CORS middleware - MUST come before exception handlers
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5000",
-        "http://127.0.0.1:5000",
-        "https://docs-dev.carina.stanford.edu",
-    ],
+    allow_origins=config['api']['cors_origins'],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
-# Add this exception handler right after the middleware
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
+
+
+# Global exception handler to ensure CORS headers on ALL responses (including errors)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Handle all exceptions and ensure CORS headers are present"""
+    logger.error(f"Global exception handler caught: {type(exc).__name__}: {exc}")
+    
+    # Determine status code
+    if isinstance(exc, HTTPException):
+        status_code = exc.status_code
+        detail = exc.detail
+    else:
+        status_code = 500
+        detail = "Internal Server Error"
+    
     return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail},
+        status_code=status_code,
+        content={"detail": detail},
         headers={
-            "Access-Control-Allow-Origin": "https://docs-dev.carina.stanford.edu",
+            "Access-Control-Allow-Origin": request.headers.get("origin", "*"),
             "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
         }
     )
+
 
 async def get_available_worker():
     """Find first available worker, or None if all busy"""
@@ -93,6 +109,14 @@ async def process_request_on_worker(worker, request_data):
             response.raise_for_status()
             worker_stats[worker_url]["processed"] += 1
             return response.json()
+    except httpx.TimeoutException as e:
+        logger.error(f"Timeout from {worker_url}: {e}")
+        worker_stats[worker_url]["errors"] += 1
+        raise HTTPException(status_code=504, detail=f"Worker timeout - request took too long")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error from {worker_url}: {e}")
+        worker_stats[worker_url]["errors"] += 1
+        raise HTTPException(status_code=e.response.status_code, detail=f"Worker error: {str(e)}")
     except Exception as e:
         logger.error(f"Error from {worker_url}: {e}")
         worker_stats[worker_url]["errors"] += 1
@@ -110,7 +134,10 @@ async def query_with_queue(request: Request):
     request_data = await request.json()
     
     # Keep trying until we get a worker
-    while True:
+    max_wait_time = 600  # 10 minutes max wait
+    wait_time = 0
+    
+    while wait_time < max_wait_time:
         # Check for available worker
         worker = await get_available_worker()
         
@@ -120,6 +147,13 @@ async def query_with_queue(request: Request):
         else:
             # All workers busy - wait a bit and retry
             await asyncio.sleep(0.5)
+            wait_time += 0.5
+    
+    # If we get here, we've waited too long
+    raise HTTPException(
+        status_code=503,
+        detail="All workers busy - please try again later"
+    )
 
 
 @app.get("/health")

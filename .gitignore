@@ -1,6 +1,7 @@
 # .gitignore
 
 *.log
+.response_cache.db
 *.sif
 .vscode
 *.code-workspace
