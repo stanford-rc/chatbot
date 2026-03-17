@@ -1,5 +1,5 @@
 bootstrap: docker
-from: python:3.11-slim
+from: ubuntu:24.04
 
 %files
     docs/sherlock/    /workspace/sherlock
@@ -9,24 +9,47 @@ from: python:3.11-slim
     app/              /workspace/app
     requirements.txt  /workspace/requirements.txt
     config.yaml       /workspace/config.yaml
-
+    
+%environment
+    export PATH=/usr/local/cuda/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    
 %post
-    apt-get update && apt-get install -y \
+    apt update && apt -y full-upgrade
+
+    apt install -y --no-install-recommends \
         git build-essential \
         wget curl ca-certificates
+
+    # Install CUDA toolkit 13.0 for ARM64
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/cuda-keyring_1.1-1_all.deb
+    apt install ./cuda-keyring_1.1-1_all.deb
+    apt update && apt install -y --no-install-recommends cuda-toolkit-13-0
+
+    rm cuda-keyring_1.1-1_all.deb
+
+    apt -y autoremove && \
+    apt clean && rm -rf /var/lib/apt/lists/*
+
+    # Install UV package manager
+    export UV_INSTALL_DIR=/usr/local/bin
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    export CUDA_HOME=/usr/local/cuda
+
+    # Create virtual environment and install PyTorch with CUDA support
+    uv venv --system-site-packages /opt/chatbot-env
+    . /opt/chatbot-env/bin/activate
+    uv pip install --torch-backend=cu130 --requirements /workspace/requirements.txt
+    deactivate
+
+    uv cache clean
     
-    pip install --upgrade pip
-    
-    # CPU-only PyTorch (fast install)
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-    
-    cd /workspace
-    pip install --no-cache-dir -r requirements.txt
-    
-    apt-get clean
-    rm -rf /var/lib/apt/lists/*
+    # Create logs directory
+    mkdir -p /workspace/logs
 
 %runscript
     #!/bin/bash
     cd /workspace
+    . /opt/chatbot-env/bin/activate
     exec "$@"
