@@ -6,6 +6,7 @@ SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
 DATABASE_FILE=".langchain.db"
 PORT="8000"
+MODE=${1:-single}  # single or multi
 
 # Read MODEL_PATH from centralized config.yaml
 MODEL_PATH=$(python3 -c "import yaml; config = yaml.safe_load(open('config.yaml')); print(config['model']['path'])")
@@ -54,11 +55,11 @@ echo "Bind mounts: $BIND_MOUNTS"
 
 # Start instance 
 echo "Starting chatbot instance..."
-apptainer instance start  --nv $BIND_MOUNTS $SIF_NAME chatapi
+apptainer instance start --nv $BIND_MOUNTS $SIF_NAME chatapi
 
 # Quick check
 echo "--- Environment Check ---"
-apptainer exec instance://chatapi python -c "
+apptainer exec instance://chatapi /opt/chatbot-env/bin/python -c "
 import torch
 import os
 print(f'PyTorch: {torch.__version__}')
@@ -70,15 +71,22 @@ print('✓ Container started')
 echo "--- Model Files Check ---"
 apptainer exec instance://chatapi ls -la "$MODEL_PATH" | head -10
 
-# Start FastAPI server on port $PORT
-echo ""
-echo "Starting FastAPI server on port $PORT..."
-echo "Access at: http://ada-lovelace.stanford.edu:$PORT"
-echo "API docs: http://ada-lovelace.stanford.edu:$PORT/docs"
-echo ""
+# Check which mode to run
+if [ "$MODE" = "multi" ]; then
+    echo ""
+    echo "=== Starting in MULTI-GPU mode ==="
+    exec ./start_multi_gpu.sh
+else
+    echo ""
+    echo "=== Starting in SINGLE-WORKER development mode ==="
+    echo "Starting FastAPI server on port $PORT..."
+    echo "Access at: http://ada-lovelace.stanford.edu:$PORT"
+    echo "API docs: http://ada-lovelace.stanford.edu:$PORT/docs"
+    echo ""
 
-apptainer exec --nv instance://chatapi \
-    uvicorn app.main:app \
-    --host 0.0.0.0 \
-    --port $PORT \
-    --reload --reload-dir app
+    apptainer exec --nv instance://chatapi \
+        /opt/chatbot-env/bin/python -m uvicorn app.main:app \
+        --host 0.0.0.0 \
+        --port $PORT \
+        --reload --reload-dir app
+fi

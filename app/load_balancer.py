@@ -1,15 +1,15 @@
-#!/usr/bin/env python3
+#!/usr/bin/env
 """
 Load Balancer with Request Queue for Multi-GPU Workers
 Accepts unlimited concurrent requests and queues them intelligently
 """
 import asyncio
-import httpx
+import httpx # pyright: ignore[reportMissingImports]
 import logging
 from collections import deque
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, HTTPException # pyright: ignore[reportMissingImports]
+from fastapi.responses import JSONResponse # pyright: ignore[reportMissingImports]
+from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissingImports]
 from contextlib import asynccontextmanager
 
 from app.config import config  # Import config directly
@@ -43,11 +43,10 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Load Balancer shutting down...")
 
-
 app = FastAPI(
     title="Multi-GPU Load Balancer",
     description="Queues and routes requests to available GPU workers",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Add CORS middleware - MUST come before exception handlers
@@ -192,5 +191,5 @@ async def stats():
 
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn # pyright: ignore[reportMissingImports]
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")

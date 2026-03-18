@@ -45,12 +45,12 @@ from: python:3.11-slim
 
     uv cache clean
     
-    # Verify python3 is available
-    which python3
-    python3 --version
+    # Verify /opt/chatbot-env/bin/python is available
+    which /opt/chatbot-env/bin/python
+    /opt/chatbot-env/bin/python --version
 
 %runscript
     #!/bin/bash
     cd /workspace
     . /opt/chatbot-env/bin/activate
-    exec python3 "$@"
+    exec /opt/chatbot-env/bin/python "$@"

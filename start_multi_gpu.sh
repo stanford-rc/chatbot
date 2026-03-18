@@ -7,18 +7,28 @@ cd "$(dirname "$0")"
 echo "=== Multi-GPU Chatbot with Smart Queueing ==="
 echo ""
 
+# Check if container exists
+if [ ! -f chatbot.sif ]; then
+    echo "ERROR: chatbot.sif not found. Run ./main.sh first to build."
+    exit 1
+fi
+
 # Make sure logs directory exists
 mkdir -p logs
 
 # Check if instance is running, start it if not
-
-# Check if instance is running, start it if not
 if ! apptainer instance list | grep -q chatapi; then
     echo "Starting chatapi instance..."
-    apptainer instance start --nv \
-      --bind "$PWD:$PWD" \
-      --bind "$PWD/logs:logs" \
-      chatbot.sif chatapi
+    
+    # Get MODEL_PATH from config
+    MODEL_PATH=$(python3 -c "import yaml; config = yaml.safe_load(open('config.yaml')); print(config['model']['path'])")
+    
+    BIND_MOUNTS="--bind $PWD:/workspace"
+    if [ -d "$MODEL_PATH" ]; then
+        BIND_MOUNTS="$BIND_MOUNTS --bind $MODEL_PATH:$MODEL_PATH:ro"
+    fi
+    
+    apptainer instance start --nv $BIND_MOUNTS chatbot.sif chatapi
     sleep 2
     echo "✓ Instance started"
 else
@@ -29,7 +39,7 @@ fi
 echo "Stopping any existing workers..."
 pkill -f "uvicorn app.main:app.*8000" || true
 pkill -f "uvicorn app.main:app.*800[12]" || true
-pkill -f "load_balancer.py" || true
+pkill -f "uvicorn app.load_balancer:app" || true
 sleep 2
 
 # Function to wait for worker health check
@@ -63,7 +73,7 @@ wait_for_worker() {
 echo ""
 echo "Starting Worker 1 (GPU 0) on port 8001..."
 APPTAINERENV_WORKER_GPU=cuda:0 apptainer exec --nv instance://chatapi \
-  python3 -m uvicorn app.main:app \
+  /opt/chatbot-env/bin/python -m uvicorn app.main:app \
   --host 127.0.0.1 \
   --port 8001 \
   --log-level info \
@@ -86,7 +96,7 @@ fi
 echo ""
 echo "Starting Worker 2 (GPU 1) on port 8002..."
 APPTAINERENV_WORKER_GPU=cuda:1 apptainer exec --nv instance://chatapi \
-  python3 -m uvicorn app.main:app \
+  /opt/chatbot-env/bin/python -m uvicorn app.main:app \
   --host 127.0.0.1 \
   --port 8002 \
   --log-level info \
@@ -106,9 +116,14 @@ if ! wait_for_worker 8002 "Worker 2"; then
 fi
 
 # Start load balancer inside container
+echo ""
 echo "Starting load balancer on port 8000..."
 apptainer exec instance://chatapi \
-  python3 -m app.load_balancer > logs/loadbalancer.log 2>&1 &
+  /opt/chatbot-env/bin/python -m uvicorn app.load_balancer:app \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --log-level info \
+  > logs/loadbalancer.log 2>&1 &
 
 LB_PID=$!
 echo $LB_PID > .loadbalancer.pid
