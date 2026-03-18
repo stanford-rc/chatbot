@@ -11,9 +11,14 @@ echo ""
 mkdir -p logs
 
 # Check if instance is running, start it if not
+
+# Check if instance is running, start it if not
 if ! apptainer instance list | grep -q chatapi; then
     echo "Starting chatapi instance..."
-    apptainer instance start --nv --bind "$PWD:$PWD" chatbot.sif chatapi
+    apptainer instance start --nv \
+      --bind "$PWD:$PWD" \
+      --bind "$PWD/logs:logs" \
+      chatbot.sif chatapi
     sleep 2
     echo "✓ Instance started"
 else

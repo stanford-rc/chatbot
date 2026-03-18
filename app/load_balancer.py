@@ -14,7 +14,8 @@ from contextlib import asynccontextmanager
 
 from app.config import config  # Import config directly
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # No need to redefine load_config() - just use the imported config

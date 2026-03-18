@@ -52,9 +52,9 @@ fi
 
 echo "Bind mounts: $BIND_MOUNTS"
 
-# Start instance (no --nv needed for CPU)
+# Start instance 
 echo "Starting chatbot instance..."
-apptainer instance start $BIND_MOUNTS $SIF_NAME chatapi
+apptainer instance start  --nv $BIND_MOUNTS $SIF_NAME chatapi
 
 # Quick check
 echo "--- Environment Check ---"
@@ -77,10 +77,8 @@ echo "Access at: http://ada-lovelace.stanford.edu:$PORT"
 echo "API docs: http://ada-lovelace.stanford.edu:$PORT/docs"
 echo ""
 
-apptainer exec instance://chatapi \
+apptainer exec --nv instance://chatapi \
     uvicorn app.main:app \
     --host 0.0.0.0 \
-    --port $PORT
-
-echo ""
-echo "Server stopped"
+    --port $PORT \
+    --reload --reload-dir app

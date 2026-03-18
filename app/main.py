@@ -11,7 +11,7 @@ from app.rag_service import RAGService
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    filename='logs/myapp.log',
+    filename='/workspace/logs/myapp.log',
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
