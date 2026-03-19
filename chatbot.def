@@ -1,12 +1,14 @@
 bootstrap: docker
-from: ubuntu:24.04
+from: python:3.11-slim
 
 %files
-    docs/sherlock/    sherlock
-    docs/farmshare/   farmshare
-    docs/oak/         oak
-    docs/elm/         elm
-    requirements.txt
+    docs/sherlock/    /workspace/sherlock
+    docs/farmshare/   /workspace/farmshare
+    docs/oak/         /workspace/oak
+    docs/elm/         /workspace/elm
+    app/              /workspace/app
+    requirements.txt  /workspace/requirements.txt
+    config.yaml       /workspace/config.yaml
     
 %environment
     export PATH=/usr/local/cuda/bin:$PATH
@@ -38,12 +40,17 @@ from: ubuntu:24.04
     # Create virtual environment and install PyTorch with CUDA support
     uv venv --system-site-packages /opt/chatbot-env
     . /opt/chatbot-env/bin/activate
-    uv pip install --torch-backend=cu130 --requirements requirements.txt
+    uv pip install --torch-backend=cu130 --requirements /workspace/requirements.txt
     deactivate
 
     uv cache clean
+    
+    # Verify /opt/chatbot-env/bin/python is available
+    which /opt/chatbot-env/bin/python
+    /opt/chatbot-env/bin/python --version
 
 %runscript
     #!/bin/bash
+    cd /workspace
     . /opt/chatbot-env/bin/activate
-    exec "$@"
+    exec /opt/chatbot-env/bin/python "$@"

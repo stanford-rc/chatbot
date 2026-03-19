@@ -1,5 +1,7 @@
-#gitignore 
+# .gitignore
+
 *.log
+.response_cache.db
 *.sif
 .vscode
 *.code-workspace
@@ -11,6 +13,11 @@ farmshare/
 oak/
 .cache/
 .venv/
+*.pid
+.*.pid
+models/
+logs/
+.env
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

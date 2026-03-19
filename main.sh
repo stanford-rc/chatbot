@@ -1,53 +1,92 @@
 #!/bin/bash
- 
+set -e
+
 # Variables
 SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
 DATABASE_FILE=".langchain.db"
-URL_MAP_PATH="docs/url_map.txt"
+PORT="8000"
+MODE=${1:-single}  # single or multi
 
 # Read MODEL_PATH from centralized config.yaml
-# This ensures all components use the same model configuration
 MODEL_PATH=$(python3 -c "import yaml; config = yaml.safe_load(open('config.yaml')); print(config['model']['path'])")
-
 echo "Using model from config.yaml: $MODEL_PATH"
 
-# Remove Existing Singularity Images
-# if [ -f $SIF_NAME ]; then
-#    rm -f $SIF_NAME
-# fi
+# Kill any old instances
+echo "Stopping existing instances..."
+apptainer instance stop chatapi 2>/dev/null || true
 
-# kill any old instances
-apptainer instance stop --all
-
-# Ensure Database File Exists with Correct Permissions
-echo "Ensuring the database file exists"
+# Ensure Database File Exists
 if [ ! -f $DATABASE_FILE ]; then
     touch $DATABASE_FILE
+    chmod 666 $DATABASE_FILE
 fi
 
-# Verify Model Path or use HuggingFace download
+# Verify Model Path exists on host
 if [ -d "$MODEL_PATH" ]; then
-    echo "Using local model at: $MODEL_PATH"
+    echo "✓ Found model at: $MODEL_PATH"
+    # Check for required model files
+    if [ ! -f "$MODEL_PATH/config.json" ]; then
+        echo "⚠ WARNING: config.json not found in model directory"
+    fi
 else
-    echo "Local model not found at: $MODEL_PATH"
-    echo "Model will download from HuggingFace using MODEL_PATH ID"
+    echo "❌ ERROR: Model path does not exist: $MODEL_PATH"
+    echo "Please check config.yaml and ensure the model path is correct"
+    exit 1
 fi
 
-echo "Refreshing documentation repositories..."
-bash filemagic.sh
+# Build SIF if not present
+if [ ! -f $SIF_NAME ]; then
+    echo "Building container..."
+    apptainer build $SIF_NAME $SIF_DEF
+fi
 
-# Uncomment these if you want to verify cuda/pytorch works:
-# apptainer exec --nv $SIF_NAME python3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
-# apptainer exec --nv $SIF_NAME python3 -c "import transformers; print(transformers.__version__)"
+# Prepare bind mounts
+# Bind current directory as /workspace
+BIND_MOUNTS="--bind $PWD:/workspace"
 
-# Start chatbot instance WITH docs bind mount
+# Since model is now in ~/apichatbot/models/ which is under $PWD,
+# it's already accessible. But we can add explicit bind for clarity:
+if [ -d "$MODEL_PATH" ]; then
+    BIND_MOUNTS="$BIND_MOUNTS --bind $MODEL_PATH:$MODEL_PATH:ro"
+fi
+
+echo "Bind mounts: $BIND_MOUNTS"
+
+# Start instance 
 echo "Starting chatbot instance..."
-apptainer instance start \
-    --nv \
-    --bind "$PWD:$PWD" \
-    $SIF_NAME chatapi
+apptainer instance start --nv $BIND_MOUNTS $SIF_NAME chatapi
 
-# Run your FastAPI app
-echo "Starting FastAPI server..."
-apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/uvicorn app.main:app --reload --reload-dir app
+# Quick check
+echo "--- Environment Check ---"
+apptainer exec instance://chatapi /opt/chatbot-env/bin/python -c "
+import torch
+import os
+print(f'PyTorch: {torch.__version__}')
+print(f'Running on: CPU')
+print('✓ Container started')
+"
+
+# Verify model files are accessible inside container
+echo "--- Model Files Check ---"
+apptainer exec instance://chatapi ls -la "$MODEL_PATH" | head -10
+
+# Check which mode to run
+if [ "$MODE" = "multi" ]; then
+    echo ""
+    echo "=== Starting in MULTI-GPU mode ==="
+    exec ./start_multi_gpu.sh
+else
+    echo ""
+    echo "=== Starting in SINGLE-WORKER development mode ==="
+    echo "Starting FastAPI server on port $PORT..."
+    echo "Access at: http://ada-lovelace.stanford.edu:$PORT"
+    echo "API docs: http://ada-lovelace.stanford.edu:$PORT/docs"
+    echo ""
+
+    apptainer exec --nv instance://chatapi \
+        /opt/chatbot-env/bin/python -m uvicorn app.main:app \
+        --host 0.0.0.0 \
+        --port $PORT \
+        --reload --reload-dir app
+fi
