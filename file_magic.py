@@ -83,7 +83,7 @@ SOURCES = [
 ]
 
 # Configure logging
-LOG_FILE = 'magicFile.log'
+LOG_FILE = os.getenv('LOG_FILE', 'magicFile.log')
 logging.basicConfig(level=logging.INFO,
                     filename=LOG_FILE,
                     filemode='w',  # Start with a fresh log file each run

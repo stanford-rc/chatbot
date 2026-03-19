@@ -5,12 +5,15 @@ set -e
 SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
 DATABASE_FILE=".langchain.db"
-PORT="8000"
 MODE=${1:-single}  # single or multi
 
-# Read MODEL_PATH from centralized config.yaml
-MODEL_PATH=$(python3 -c "import yaml; config = yaml.safe_load(open('config.yaml')); print(config['model']['path'])")
+# Read settings from centralized config.yaml
+MODEL_PATH=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c['model']['path'])")
+PORT=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('api_port',8000))")
+HOST=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('host','localhost'))")
+LOG_DIR=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('logging',{}).get('log_dir','logs'))")
 echo "Using model from config.yaml: $MODEL_PATH"
+echo "API port: $PORT, host: $HOST, log dir: $LOG_DIR"
 
 # Kill any old instances
 echo "Stopping existing instances..."
@@ -80,8 +83,8 @@ else
     echo ""
     echo "=== Starting in SINGLE-WORKER development mode ==="
     echo "Starting FastAPI server on port $PORT..."
-    echo "Access at: http://ada-lovelace.stanford.edu:$PORT"
-    echo "API docs: http://ada-lovelace.stanford.edu:$PORT/docs"
+    echo "Access at: http://$HOST:$PORT"
+    echo "API docs: http://$HOST:$PORT/docs"
     echo ""
 
     apptainer exec --nv instance://chatapi \
