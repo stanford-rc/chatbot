@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 # No need to redefine load_config() - just use the imported config
 
-# Worker configuration
-WORKERS = [
+# Worker configuration - loaded from config.yaml
+WORKERS = config.get('workers', [
     {"url": "http://localhost:8001", "gpu": "cuda:0"},
     {"url": "http://localhost:8002", "gpu": "cuda:1"},
-]
+])
 
 # Queue and worker state
 request_queue = deque()

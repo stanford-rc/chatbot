@@ -47,7 +47,20 @@ class Settings(BaseSettings):
     
     # Retrieval settings
     MAX_RETRIEVED_DOCS: int = config.get('retrieval', {}).get('MAX_RETRIEVED_DOCS', 5)
-    
+
+    # Server settings
+    API_PORT: int = Field(default=config.get('server', {}).get('api_port', 8000), env="API_PORT")
+    API_HOST: str = Field(default=config.get('server', {}).get('host', 'localhost'), env="API_HOST")
+
+    # Logging settings
+    LOG_DIR: str = Field(default=config.get('logging', {}).get('log_dir', 'logs'), env="LOG_DIR")
+
+    # Worker configuration (multi-GPU mode)
+    WORKERS: list = config.get('workers', [
+        {"url": "http://localhost:8001", "port": 8001, "gpu": "cuda:0"},
+        {"url": "http://localhost:8002", "port": 8002, "gpu": "cuda:1"},
+    ])
+
     class Config:
         env_file = ".env"
         env_file_encoding = 'utf-8'

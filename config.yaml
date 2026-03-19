@@ -71,3 +71,21 @@ clusters:
   farmshare: "docs/farmshare/"
   oak: "docs/oak/"
   elm: "docs/elm/"
+
+# Server Settings
+server:
+  api_port: 8000
+  host: "ada-lovelace.stanford.edu"
+
+# Logging Settings
+logging:
+  log_dir: "logs"
+
+# Worker Configuration (multi-GPU mode)
+workers:
+  - url: "http://localhost:8001"
+    port: 8001
+    gpu: "cuda:0"
+  - url: "http://localhost:8002"
+    port: 8002
+    gpu: "cuda:1"

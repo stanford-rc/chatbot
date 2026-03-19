@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException # pyright: ignore[reportMissingImports]
@@ -9,9 +10,10 @@ from app.models import QueryRequest, QueryResponse
 from app.rag_service import RAGService
 
 # Setup logging
+os.makedirs(settings.LOG_DIR, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    filename='/workspace/logs/myapp.log',
+    filename=os.path.join(settings.LOG_DIR, 'myapp.log'),
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
