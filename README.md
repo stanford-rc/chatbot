@@ -80,7 +80,7 @@ Client Request → Load Balancer (port 8000)
 - Per-worker statistics tracking
 - ~24 tokens/sec total throughput
 
-**Logs:**
+**Logs** (written to `logging.log_dir` from `config.yaml`, default `logs/`):
 - `logs/worker1.log` - Worker 1 output
 - `logs/worker2.log` - Worker 2 output
 - `logs/loadbalancer.log` - Load balancer output
@@ -216,24 +216,89 @@ ls -la ~/apichatbot/models/YOUR_MODEL/
 
 ## Configuration
 
-### `config.yaml`
+All settings live in `config.yaml`. Every value has a sensible default, so you only need to change what differs from the defaults.
+
+### `config.yaml` — full reference
+
 ```yaml
 model:
-  path: /path/to/your/model  # Must exist on host
-  device: "cuda"             # or "cpu"
-  type: "mistral"
-  
+  path: /path/to/your/model  # Must exist on host; read by main.sh and start_multi_gpu.sh
+  type: "gemma"              # Model architecture (e.g. gemma, mistral)
+  device: "cpu"              # "cpu" or "cuda"; overridden per-worker by WORKER_GPU
+  use_quantization: false
+  local_files_only: true
+
+generation:
+  max_new_tokens: 128
+  do_sample: false
+  num_beams: 1
+  temperature: null
+
+app:
+  title: "SRC Cluster Knowledge Base API"
+  description: "..."
+  version: "1.0.0"
+
 api:
   cors_origins:
-    - "http://localhost:3000"
+    - "http://localhost:4000"
     - "https://your-frontend.com"
+  CLUSTERS:
+    sherlock: "sherlock"
+    farmshare: "farmshare"
+    oak: "oak"
+    elm: "elm"
+
+caching:
+  SEMANTIC_CACHE_ENABLED: true
+  SEMANTIC_CACHE_THRESHOLD: 0.70  # 0.0–1.0; lower = more permissive
+  SEMANTIC_CACHE_DB: ".response_cache.db"
+  LANGCHAIN_CACHE_DB: ".langchain.db"
+
+retrieval:
+  MAX_RETRIEVED_DOCS: 5
+
+# Server settings — controls port/host used by main.sh and start_multi_gpu.sh
+server:
+  api_port: 8000             # Port for the load balancer / single-worker API
+  host: "ada-lovelace.stanford.edu"  # Hostname shown in startup output
+
+# Logging — where runtime logs are written
+logging:
+  log_dir: "logs"            # Relative or absolute path; directory is created if missing
+
+# Worker definitions — used by start_multi_gpu.sh and the load balancer
+workers:
+  - url: "http://localhost:8001"
+    port: 8001
+    gpu: "cuda:0"
+  - url: "http://localhost:8002"
+    port: 8002
+    gpu: "cuda:1"
+
+clusters:
+  sherlock: "docs/sherlock/"
+  farmshare: "docs/farmshare/"
+  oak: "docs/oak/"
+  elm: "docs/elm/"
 ```
 
-### Environment Variables
+### Environment Variable Overrides
 
-Set via `APPTAINERENV_*` prefix:
-- `APPTAINERENV_WORKER_GPU=cuda:0` - Assign specific GPU
-- `APPTAINERENV_LOG_LEVEL=debug` - Set log verbosity
+These override the corresponding `config.yaml` values at runtime:
+
+| Variable | Overrides | Description |
+|---|---|---|
+| `MODEL_PATH` | `model.path` | Path to the LLM model directory |
+| `API_PORT` | `server.api_port` | Port for the API / load balancer |
+| `API_HOST` | `server.host` | Hostname shown in startup messages |
+| `LOG_DIR` | `logging.log_dir` | Directory for worker and app logs |
+| `LOG_FILE` | *(file_magic.py only)* | Log file path for the doc-processing script |
+| `REPO_CLONE_DIR` | *(file_magic.py only)* | Base directory for cloned repos (default: `docs`) |
+| `GITHUB_TOKEN` | *(file_magic.py only)* | Token for authenticated GitHub cloning |
+
+Set via `APPTAINERENV_*` prefix to pass into the container:
+- `APPTAINERENV_WORKER_GPU=cuda:0` — assign a specific GPU to a worker
 
 ---
 
