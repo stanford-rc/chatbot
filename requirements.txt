@@ -1,12 +1,11 @@
 # requirements.txt
 #mistral_inference brings in xformers which whose wheels fail on ARM
 fastapi
-gptqmodel
 uvicorn[standard]
 pydantic-settings
 python-dotenv
 torch
-transformers>=4.36.0
+transformers>=4.45.0,<5.0.0
 accelerate
 bitsandbytes>=0.41.0
 autoawq
