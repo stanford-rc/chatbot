@@ -20,3 +20,4 @@ apptainer exec \
     --pwd "$PWD" \
     $SIF_NAME \
     python3 file_magic.py
+    python3 scrape_srcc.py
