@@ -10,13 +10,19 @@ export REPO_CLONE_DIR="docs"
 echo "Ensuring docs directory exists: $DOCS_DIR"
 mkdir -p "$DOCS_DIR"
 
-echo "Apptaining from filemagic.sh"
-# Comment this out if you don't want to build the sif
-
-apptainer build $SIF_NAME $SIF_DEF
+if [ ! -f $SIF_NAME ]; then
+    echo "Building container..."
+    apptainer build $SIF_NAME $SIF_DEF
+fi
 
 apptainer exec \
     --bind "$PWD:$PWD" \
     --pwd "$PWD" \
     $SIF_NAME \
     python3 file_magic.py
+
+apptainer exec \
+    --bind "$PWD:$PWD" \
+    --pwd "$PWD" \
+    $SIF_NAME \
+    python3 scrape_srcc.py
