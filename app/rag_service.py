@@ -6,7 +6,6 @@ from typing import Dict, List, Tuple
 
 import frontmatter
 import numpy as np
-import torch
 from fastapi import HTTPException
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -15,7 +14,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_core.globals import set_llm_cache
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from vllm import LLM, SamplingParams
 
 from app.config import Settings
 from app.models import QueryRequest, QueryResponse, Source
@@ -105,55 +104,27 @@ class RAGService:
             self.semantic_cache = None
 
     def _load_model(self):
-        """Load the language model and tokenizer"""
-        logger.info(f"Loading model from {self.settings.MODEL_PATH}...")
-        logger.info(f"Model type: {self.settings.MODEL_TYPE}, Device: {self.settings.MODEL_DEVICE}, Quantization: {self.settings.USE_QUANTIZATION}")
-        
-        # Determine device and dtype
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        logger.info(f"Using Device: {device}, dtype: {torch_dtype}")
-        
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.settings.MODEL_PATH,
-            local_files_only=self.settings.LOCAL_FILES_ONLY
+        """Load the language model via vLLM."""
+        logger.info(f"Loading model with vLLM from {self.settings.MODEL_PATH}...")
+
+        # Restrict this worker to its designated GPU via CUDA_VISIBLE_DEVICES.
+        # Must be set before vLLM initialises its CUDA context.
+        worker_gpu = os.environ.get('WORKER_GPU', '')
+        if worker_gpu.startswith('cuda:'):
+            gpu_id = worker_gpu.split(':')[1]
+            os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
+            logger.info(f"Restricting to GPU {gpu_id} via CUDA_VISIBLE_DEVICES")
+
+        self.model = LLM(
+            model=self.settings.MODEL_PATH,
+            quantization="awq",
+            dtype="half",
+            gpu_memory_utilization=0.85,
+            max_model_len=8192,
         )
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        # Load model
-        # Pin to specific GPU if WORKER_GPU is set (multi-GPU mode), otherwise use auto
-        worker_gpu = os.environ.get('WORKER_GPU')
-        device_map = {"": worker_gpu} if (worker_gpu and torch.cuda.is_available()) else ("auto" if torch.cuda.is_available() else None)
-        logger.info(f"WORKER_GPU env var: {worker_gpu or 'NOT SET'}, device_map: {device_map}")
-
-        if self.settings.USE_QUANTIZATION:
-            logger.warning("Quantization enabled - may cause slowdown on ARM architecture")
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-            )
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.settings.MODEL_PATH,
-                quantization_config=bnb_config,
-                device_map=device_map,
-                local_files_only=self.settings.LOCAL_FILES_ONLY,
-                dtype=torch.float16,
-            )
-        else:
-            logger.info("Loading model with pre-quantized weights (AWQ or similar)")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.settings.MODEL_PATH,
-                dtype=torch_dtype,
-                device_map=device_map,
-                local_files_only=self.settings.LOCAL_FILES_ONLY
-            )
-
-        self.model.eval()  # Set to inference mode
+        self.tokenizer = self.model.get_tokenizer()
         self.llm = RunnableLambda(self._generate_response)
-        logger.info("Model and tokenizer loaded successfully.")
+        logger.info("Model loaded successfully via vLLM.")
 
     def _load_retrievers(self):
         """Load BM25 and (optionally) FAISS retrievers for each cluster"""
@@ -319,64 +290,39 @@ class RAGService:
 
     def _generate_response(self, inputs: Dict) -> str:
         """
-        Generate response using the language model.
-        
+        Generate a response using vLLM.
+
         Args:
-            inputs: Dictionary containing the prompt/query
-            
+            inputs: Dictionary containing the prompt/query from LangChain
+
         Returns:
             Generated text response
         """
         try:
-            logger.info(f"Generating response for inputs: {inputs}")
-            
-            # Extract content from LangChain message object
+            # Extract prompt content from LangChain message object
             if isinstance(inputs, dict) and 'messages' in inputs:
                 query = inputs['messages'][0].content
             else:
                 query = str(inputs)
-            
-            # Format prompt based on model type
-            if self.settings.MODEL_TYPE == "gemma":
-                inputs_encoded = self.tokenizer(query, return_tensors="pt")
-            elif self.settings.MODEL_TYPE in ["llama", "tinyllama", "qwen"]:
-                messages = [{"role": "user", "content": query}]
-                prompt = self.tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True
-                )
-                inputs_encoded = self.tokenizer(prompt, return_tensors="pt")
-            else:
-                inputs_encoded = self.tokenizer(query, return_tensors="pt")
-            
-            if torch.cuda.is_available():
-                inputs_encoded = inputs_encoded.to(self.settings.MODEL_DEVICE)
-            
-            # Generate response
-            logger.info("Starting model generation...")
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs_encoded,
-                    max_new_tokens=self.settings.MAX_NEW_TOKENS,
-                    do_sample=False,
-                    num_beams=1,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    use_cache=True,
-                )
-            logger.info(f"Generation complete. Tokens generated: {outputs.shape[1] - inputs_encoded['input_ids'].shape[1]}")
-            
-            # Decode only the new tokens (exclude the prompt)
-            response = self.tokenizer.decode(
-                outputs[0][inputs_encoded['input_ids'].shape[1]:],
-                skip_special_tokens=True
+
+            sampling_params = SamplingParams(
+                max_tokens=self.settings.MAX_NEW_TOKENS,
+                temperature=0.0,  # greedy decoding
             )
-            
+
+            # vLLM's chat() applies the model's own chat template automatically
+            logger.info("Starting vLLM generation...")
+            outputs = self.model.chat(
+                messages=[{"role": "user", "content": query}],
+                sampling_params=sampling_params,
+                use_tqdm=False,
+            )
+            response = outputs[0].outputs[0].text
+            logger.info(f"Generation complete. Tokens generated: {len(outputs[0].outputs[0].token_ids)}")
             return response
-            
+
         except Exception as e:
-            logger.error(f"Error during LLM generation: {e}")
+            logger.error(f"Error during vLLM generation: {e}")
             raise ValueError(f"LLM generation error: {e}")
 
     def _identify_cluster(self, user_query: str) -> str:

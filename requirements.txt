@@ -8,6 +8,7 @@ torch
 transformers>=5.0.0
 accelerate
 bitsandbytes>=0.41.0
+vllm
 langchain>=1.2.7
 langchain-community
 langchain-huggingface
