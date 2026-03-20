@@ -41,6 +41,9 @@ from: python:3.11-slim
     uv venv --system-site-packages /opt/chatbot-env
     . /opt/chatbot-env/bin/activate
     uv pip install --torch-backend=cu130 --requirements /workspace/requirements.txt
+    # gptqmodel detects torch at build time, so it needs --no-build-isolation
+    # to find the torch already installed above rather than an empty build env
+    uv pip install --no-build-isolation gptqmodel
     deactivate
 
     uv cache clean

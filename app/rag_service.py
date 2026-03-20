@@ -140,13 +140,13 @@ class RAGService:
                 quantization_config=bnb_config,
                 device_map=device_map,
                 local_files_only=self.settings.LOCAL_FILES_ONLY,
-                torch_dtype=torch.float16,
+                dtype=torch.float16,
             )
         else:
             logger.info("Loading model with pre-quantized weights (AWQ or similar)")
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.settings.MODEL_PATH,
-                torch_dtype=torch_dtype,
+                dtype=torch_dtype,
                 device_map=device_map,
                 local_files_only=self.settings.LOCAL_FILES_ONLY
             )
