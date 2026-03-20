@@ -5,8 +5,8 @@
 # Model Configuration
 
 model:
-  path: "/home/users/saracook/apichatbot/models/gemma-2-9b-it"
-  type: "gemma"
+  path: "/home/users/bcritt/apichatbot/models/Qwen2.5-32B-Instruct-AWQ"
+  type: "qwen"
   device: "cuda"
   use_quantization: false
   local_files_only: true

@@ -7,7 +7,12 @@
       "Bash(python3 -c \"import ast; ast.parse\\(open\\(''app/rag_service.py''\\).read\\(\\)\\); print\\(''rag_service.py: OK''\\)\")",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\(''app/prompts.py''\\).read\\(\\)\\); print\\(''prompts.py: OK''\\)\")",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\(''app/config.py''\\).read\\(\\)\\); print\\(''config.py: OK''\\)\")",
-      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''config.yaml''\\)\\); print\\(''config.yaml: OK''\\)\")"
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''config.yaml''\\)\\); print\\(''config.yaml: OK''\\)\")",
+      "WebSearch",
+      "WebFetch(domain:llm-stats.com)",
+      "WebFetch(domain:apxml.com)",
+      "WebFetch(domain:qwenlm.github.io)",
+      "WebFetch(domain:qwen.readthedocs.io)"
     ]
   }
 }

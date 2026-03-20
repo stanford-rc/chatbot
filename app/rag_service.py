@@ -339,7 +339,7 @@ class RAGService:
             # Format prompt based on model type
             if self.settings.MODEL_TYPE == "gemma":
                 inputs_encoded = self.tokenizer(query, return_tensors="pt")
-            elif self.settings.MODEL_TYPE in ["llama", "tinyllama"]:
+            elif self.settings.MODEL_TYPE in ["llama", "tinyllama", "qwen"]:
                 messages = [{"role": "user", "content": query}]
                 prompt = self.tokenizer.apply_chat_template(
                     messages,

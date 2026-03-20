@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup script for chatbot improvements:
 #   1. Rebuild container (picks up faiss-cpu from requirements.txt)
-#   2. Download Llama 3.3 70B Instruct (4-bit AWQ) from HuggingFace
+#   2. Download Qwen 2.5 32B Instruct (4-bit AWQ) from HuggingFace
 #   3. Tune MIN_BM25_SCORE with interactive queries against the running service
 #
 # Usage:
@@ -14,9 +14,9 @@ set -e
 cd "$(dirname "$0")"
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-MODEL_NAME="ibnzterrell/Meta-Llama-3.3-70B-Instruct-AWQ-INT4"
+MODEL_NAME="Qwen/Qwen2.5-32B-Instruct-AWQ"
 MODEL_DIR="$(dirname "$(python -c "import yaml; print(yaml.safe_load(open('config.yaml'))['model']['path'])")")"
-MODEL_LOCAL_PATH="$MODEL_DIR/Meta-Llama-3.3-70B-Instruct-AWQ-INT4"
+MODEL_LOCAL_PATH="$MODEL_DIR/Qwen2.5-32B-Instruct-AWQ"
 
 SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
@@ -67,7 +67,7 @@ rebuild_container() {
 download_model() {
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}STEP 2: Download Llama 3.3 70B Instruct (4-bit AWQ)${NC}"
+    echo -e "${CYAN}STEP 2: Download Qwen 2.5 32B Instruct (4-bit AWQ)${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo "Model:       $MODEL_NAME"
@@ -104,14 +104,14 @@ old_type = config['model']['type']
 old_quant = config['model']['use_quantization']
 
 config['model']['path'] = '$MODEL_LOCAL_PATH'
-config['model']['type'] = 'llama'
+config['model']['type'] = 'qwen'
 config['model']['use_quantization'] = True
 
 with open('config.yaml', 'w') as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 print(f'  model.path: {old_path} → $MODEL_LOCAL_PATH')
-print(f'  model.type: {old_type} → llama')
+print(f'  model.type: {old_type} → qwen')
 print(f'  model.use_quantization: {old_quant} → True')
 "
 
