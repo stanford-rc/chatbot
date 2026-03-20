@@ -22,11 +22,15 @@ def get_prompt_template(model_type: str) -> ChatPromptTemplate:
     """
 
     if model_type == "llama":
+        # Llama uses [INST] tags; rag_service.py also wraps via apply_chat_template
         return ChatPromptTemplate.from_template(
             "<s>[INST] " + _SYSTEM_INSTRUCTIONS + "\nCONTEXT:\n{context}\n\nUSER QUERY:\n{query} [/INST]"
         )
     else:
-        # Gemma and other models
+        # Qwen, Gemma, and other models: plain template.
+        # For Qwen/Llama-family, rag_service._generate_response wraps this via
+        # tokenizer.apply_chat_template, so the system instructions here become
+        # the body of the user turn and are still followed correctly.
         return ChatPromptTemplate.from_template(
             _SYSTEM_INSTRUCTIONS + "\nCONTEXT:\n{context}\n\nUSER QUERY:\n{query}"
         )

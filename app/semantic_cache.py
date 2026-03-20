@@ -53,7 +53,11 @@ class SemanticResponseCache:
         """Create cache table if it doesn't exist."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
+        # WAL mode allows concurrent reads from multiple workers without locking
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA busy_timeout=5000;")  # Wait up to 5s on write contention
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS response_cache (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

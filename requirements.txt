@@ -8,6 +8,7 @@ torch
 transformers>=4.36.0
 accelerate
 bitsandbytes>=0.41.0
+autoawq
 langchain>=1.2.7
 langchain-community
 langchain-huggingface

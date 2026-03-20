@@ -72,6 +72,11 @@ async def health_check():
             status_code=503,
             detail="Service not ready - model still loading"
         )
+    if not rag_service.retrievers:
+        raise HTTPException(
+            status_code=503,
+            detail="Service not ready - no document retrievers loaded"
+        )
     return {
         "status": "healthy",
         "model_loaded": True,

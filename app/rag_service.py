@@ -391,7 +391,7 @@ class RAGService:
         """
         user_query_lower = user_query.lower()
         for cluster_name in self.settings.CLUSTERS.keys():
-            if cluster_name in user_query_lower:
+            if re.search(r'\b' + re.escape(cluster_name) + r'\b', user_query_lower):
                 return cluster_name
         return "unknown"
 
@@ -458,8 +458,8 @@ class RAGService:
         Returns:
             Tuple of (formatted_answer, source_objects)
         """
-        # Convert literal \n strings (Gemma sometimes outputs the text "\n"
-        # instead of actual newlines) into real newlines
+        # Some models output the literal two-character sequence \n instead of
+        # a real newline. Normalize those to actual newlines regardless of model.
         llm_answer = llm_answer.replace('\\n', '\n')
         # Strip code block fences the model sometimes wraps its entire response in
         llm_answer = re.sub(r'^[\s]*```[^\n]*\n', '', llm_answer)

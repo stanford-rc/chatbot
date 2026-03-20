@@ -30,6 +30,7 @@ WORKERS = config.get('workers', [
 request_queue = deque()
 worker_busy = {worker["url"]: False for worker in WORKERS}
 worker_stats = {worker["url"]: {"processed": 0, "errors": 0} for worker in WORKERS}
+_worker_lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -86,18 +87,20 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-async def get_available_worker():
-    """Find first available worker, or None if all busy"""
-    for worker in WORKERS:
-        if not worker_busy[worker["url"]]:
-            return worker
+async def get_and_claim_worker():
+    """Atomically find and mark an available worker busy. Returns None if all busy."""
+    async with _worker_lock:
+        for worker in WORKERS:
+            if not worker_busy[worker["url"]]:
+                worker_busy[worker["url"]] = True
+                return worker
     return None
 
 
 async def process_request_on_worker(worker, request_data):
     """Send request to specific worker and return response"""
     worker_url = worker["url"]
-    worker_busy[worker_url] = True
+    # Worker is already marked busy by get_and_claim_worker()
     
     try:
         logger.info(f"Routing request to {worker_url} ({worker['gpu']})")
@@ -138,8 +141,8 @@ async def query_with_queue(request: Request):
     wait_time = 0
     
     while wait_time < max_wait_time:
-        # Check for available worker
-        worker = await get_available_worker()
+        # Check for available worker (atomic check-and-claim)
+        worker = await get_and_claim_worker()
         
         if worker:
             # Worker available - process immediately
