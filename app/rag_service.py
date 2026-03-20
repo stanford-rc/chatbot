@@ -1,9 +1,11 @@
 import logging
 import os
 import re
-from typing import Dict, List
+from collections import defaultdict
+from typing import Dict, List, Tuple
 
 import frontmatter
+import numpy as np
 import torch
 from fastapi import HTTPException
 from langchain_core.documents import Document
@@ -26,6 +28,14 @@ try:
 except ImportError:
     SEMANTIC_CACHE_AVAILABLE = False
 
+# FAISS vector search - optional dependency
+try:
+    import faiss
+    from sentence_transformers import SentenceTransformer
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,8 +51,10 @@ class RAGService:
         self.model = None
         self.tokenizer = None
         self.retrievers: Dict[str, BM25Retriever] = {}
+        self.vector_stores: Dict[str, dict] = {}  # cluster -> {index, docs, model}
         self.chain = None
         self.semantic_cache = None
+        self.embedding_model = None
 
     def _ingest_markdown_files(self, corpus_dir: str) -> List[Document]:
         """
@@ -143,14 +155,22 @@ class RAGService:
         logger.info("Model and tokenizer loaded successfully.")
 
     def _load_retrievers(self):
-        """Load document retrievers for each cluster"""
+        """Load BM25 and (optionally) FAISS retrievers for each cluster"""
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-        
+
+        # Load embedding model once if hybrid retrieval is enabled
+        if self.settings.HYBRID_ENABLED and FAISS_AVAILABLE:
+            logger.info(f"Loading embedding model for hybrid retrieval: {self.settings.VECTOR_MODEL}")
+            self.embedding_model = SentenceTransformer(self.settings.VECTOR_MODEL)
+            logger.info("Embedding model loaded.")
+        elif self.settings.HYBRID_ENABLED and not FAISS_AVAILABLE:
+            logger.warning("Hybrid retrieval enabled but faiss-cpu not installed. Falling back to BM25 only.")
+
         for cluster_name, path in self.settings.CLUSTERS.items():
             if not os.path.isdir(path):
                 logger.warning(f"Directory not found for cluster '{cluster_name}': {path}. Skipping.")
                 continue
-            
+
             logger.info(f"Ingesting documents for cluster: {cluster_name}")
             documents = self._ingest_markdown_files(path)
             if not documents:
@@ -159,7 +179,90 @@ class RAGService:
 
             split_docs = text_splitter.split_documents(documents)
             self.retrievers[cluster_name] = BM25Retriever.from_documents(split_docs)
-            logger.info(f"Created retriever for '{cluster_name}'.")
+            logger.info(f"Created BM25 retriever for '{cluster_name}' ({len(split_docs)} chunks).")
+
+            # Build FAISS index for this cluster
+            if self.embedding_model is not None:
+                embeddings = self.embedding_model.encode(
+                    [doc.page_content for doc in split_docs],
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
+                dimension = embeddings.shape[1]
+                index = faiss.IndexFlatIP(dimension)  # Inner product on normalized vectors = cosine similarity
+                index.add(embeddings.astype(np.float32))
+                self.vector_stores[cluster_name] = {
+                    "index": index,
+                    "docs": split_docs,
+                }
+                logger.info(f"Created FAISS index for '{cluster_name}' ({len(split_docs)} vectors, dim={dimension}).")
+
+    def _retrieve_bm25_with_scores(self, query: str, cluster: str) -> List[Tuple[Document, float]]:
+        """Retrieve documents via BM25 with relevance scores."""
+        retriever = self.retrievers[cluster]
+        # Access the underlying BM25 vectorizer to get scores
+        tokenized_query = retriever.preprocess_func(query)
+        bm25_scores = retriever.vectorizer.get_scores(tokenized_query)
+
+        # Pair each doc with its score and sort descending
+        scored_docs = list(zip(retriever.docs, bm25_scores))
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+
+        # Log top scores for tuning visibility
+        top_scores = scored_docs[:self.settings.MAX_RETRIEVED_DOCS]
+        for doc, score in top_scores:
+            title = doc.metadata.get('title', doc.metadata.get('source', 'Unknown'))
+            logger.info(f"BM25 score={score:.2f} for '{title}'")
+
+        # Filter by minimum score threshold
+        min_score = self.settings.MIN_BM25_SCORE
+        filtered = [(doc, score) for doc, score in scored_docs if score >= min_score]
+        logger.info(f"BM25 filtering: {len(filtered)} of {len(scored_docs)} docs above threshold {min_score}")
+        return filtered[:self.settings.MAX_RETRIEVED_DOCS]
+
+    def _retrieve_faiss(self, query: str, cluster: str) -> List[Tuple[Document, float]]:
+        """Retrieve documents via FAISS vector similarity."""
+        store = self.vector_stores.get(cluster)
+        if not store or self.embedding_model is None:
+            return []
+
+        query_embedding = self.embedding_model.encode(
+            [query], normalize_embeddings=True
+        ).astype(np.float32)
+
+        k = min(self.settings.MAX_RETRIEVED_DOCS * 2, store["index"].ntotal)
+        scores, indices = store["index"].search(query_embedding, k)
+
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx >= 0:  # FAISS returns -1 for missing results
+                results.append((store["docs"][idx], float(score)))
+        return results
+
+    def _reciprocal_rank_fusion(
+        self,
+        bm25_results: List[Tuple[Document, float]],
+        faiss_results: List[Tuple[Document, float]],
+    ) -> List[Document]:
+        """Merge two ranked lists using reciprocal rank fusion (RRF)."""
+        k = self.settings.RRF_K
+        # Use page_content as dedup key since the same chunk can appear in both lists
+        rrf_scores: Dict[str, float] = defaultdict(float)
+        doc_map: Dict[str, Document] = {}
+
+        for rank, (doc, _score) in enumerate(bm25_results):
+            key = doc.page_content
+            rrf_scores[key] += 1.0 / (k + rank + 1)
+            doc_map[key] = doc
+
+        for rank, (doc, _score) in enumerate(faiss_results):
+            key = doc.page_content
+            rrf_scores[key] += 1.0 / (k + rank + 1)
+            doc_map[key] = doc
+
+        # Sort by fused score descending
+        sorted_keys = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        return [doc_map[key] for key in sorted_keys[:self.settings.MAX_RETRIEVED_DOCS]]
 
     def _build_chain(self):
         """Build the RAG chain with retriever, prompt, and LLM"""
@@ -167,20 +270,30 @@ class RAGService:
 
         def retrieve_and_format_context(inputs: Dict) -> str:
             query, cluster = inputs['query'], inputs['cluster']
-            retriever = self.retrievers[cluster]
-            retrieved_docs = retriever.invoke(query)
-            retrieved_docs = retrieved_docs[:self.settings.MAX_RETRIEVED_DOCS]
+
+            # BM25 retrieval with score filtering
+            bm25_results = self._retrieve_bm25_with_scores(query, cluster)
+            logger.info(f"BM25 returned {len(bm25_results)} docs above threshold")
+
+            # Hybrid: merge BM25 + FAISS via RRF
+            if self.settings.HYBRID_ENABLED and cluster in self.vector_stores:
+                faiss_results = self._retrieve_faiss(query, cluster)
+                logger.info(f"FAISS returned {len(faiss_results)} docs")
+                retrieved_docs = self._reciprocal_rank_fusion(bm25_results, faiss_results)
+            else:
+                retrieved_docs = [doc for doc, _score in bm25_results]
+
             inputs['retrieved_docs'] = retrieved_docs
-            
+
             if not retrieved_docs:
-                return "No relevant documents were found."
-            
+                return "No relevant documents were found for this query."
+
             # Format with title so LLM can cite by title
             return "\n\n".join(
                 f"--- Document: {doc.metadata.get('title', doc.metadata.get('source', 'Unknown'))} ---\n{doc.page_content}"
                 for doc in retrieved_docs
             )
-        
+
         self.chain = (
             RunnablePassthrough()
             | RunnablePassthrough.assign(context=RunnableLambda(retrieve_and_format_context))
@@ -305,28 +418,57 @@ class RAGService:
         
         return sources
 
+    # Keywords that suggest the answer is about cluster-specific configuration
+    _CLUSTER_SPECIFIC_PATTERNS = re.compile(
+        r'\b(?:partition|sbatch|srun|squeue|scancel|salloc|sinfo|scontrol'
+        r'|module\s+load|module\s+avail|scratch|oak|sherlock|farmshare|elm'
+        r'|slurm|quota|storage|node|gpu\s+partition|memory\s+limit'
+        r'|job\s+submit|batch\s+script|queue)\b',
+        re.IGNORECASE,
+    )
+
+    def _check_grounding(self, answer: str, cited_titles: set, retrieved_titles: set) -> str:
+        """
+        If the answer discusses cluster-specific topics but cites no retrieved
+        documents, append a disclaimer.
+        """
+        if not self.settings.GROUNDING_CHECK_ENABLED:
+            return answer
+
+        # If the model cited at least one retrieved doc, it's grounded
+        if cited_titles & retrieved_titles:
+            return answer
+
+        # Check whether the answer touches cluster-specific topics
+        if self._CLUSTER_SPECIFIC_PATTERNS.search(answer):
+            logger.warning("Grounding check: answer discusses cluster topics but cites no retrieved docs")
+            return answer + f"\n\n*{self.settings.REFUSAL_DISCLAIMER}*"
+
+        return answer
+
     def _process_llm_answer(self, llm_answer: str, retrieved_docs: List[Document]) -> tuple[str, List[Source]]:
         """
         Process LLM answer to extract citations and format sources.
-        
+
         Args:
             llm_answer: Raw answer from LLM
             retrieved_docs: Documents that were retrieved for context
-            
+
         Returns:
             Tuple of (formatted_answer, source_objects)
         """
+        # Convert literal \n strings (Gemma sometimes outputs the text "\n"
+        # instead of actual newlines) into real newlines
+        llm_answer = llm_answer.replace('\\n', '\n')
         # Strip code block fences the model sometimes wraps its entire response in
         llm_answer = re.sub(r'^[\s]*```[^\n]*\n', '', llm_answer)
         llm_answer = re.sub(r'\n```[\s]*$', '', llm_answer)
-        # Replace literal \n text and real newlines with spaces
-        llm_answer = llm_answer.replace('\\n', ' ').replace('\n', ' ')
         llm_answer = llm_answer.strip()
-        
+
         # Extract citations from LLM answer (format: [Title])
         cited_titles = set(re.findall(r'\[([^\]]+)\]', llm_answer))
         logger.info(f"LLM cited {len(cited_titles)} sources: {cited_titles}")
-        
+
         # Build title → URL mapping from retrieved docs
         title_to_url = {}
         title_to_doc = {}
@@ -337,7 +479,7 @@ class RAGService:
                 url = ''.join(url.split())  # Remove any embedded whitespace/newlines
             title_to_url[title] = url
             title_to_doc[title] = doc
-        
+
         # Convert [Title] citations to inline markdown links [Title](URL)
         final_answer = llm_answer
         for title in cited_titles:
@@ -347,19 +489,23 @@ class RAGService:
                     f'[{title}]',
                     f'[{title}]({title_to_url[title]})'
                 )
-        
+
         # Build sources list from only cited documents
         cited_docs = [title_to_doc[title] for title in cited_titles if title in title_to_doc]
         source_objects = self._format_sources(cited_docs) if cited_docs else []
-        
-        # Append source URLs inline (no newlines to keep output clean)
+
+        # Grounding safety net: flag ungrounded cluster-specific answers
+        retrieved_titles = set(title_to_doc.keys())
+        final_answer = self._check_grounding(final_answer, cited_titles, retrieved_titles)
+
+        # Append sources as a markdown list
         if source_objects:
-            source_list = " 📚 **Sources:** " + " | ".join(
-                f"[{src.title}]({src.url})" if src.url else src.title
+            source_lines = "\n".join(
+                f"- [{src.title}]({src.url})" if src.url else f"- {src.title}"
                 for src in source_objects
             )
-            final_answer = final_answer + source_list
-        
+            final_answer = final_answer + f"\n\n**Sources:**\n{source_lines}"
+
         return final_answer, source_objects
 
     def query(self, request: QueryRequest) -> QueryResponse:

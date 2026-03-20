@@ -13,7 +13,7 @@ model:
 
 # Generation Parameters
 generation:
-  max_new_tokens: 128
+  max_new_tokens: 512
   do_sample: false  # Greedy decoding for speed
   num_beams: 1      # No beam search
   temperature: null # Disabled for greedy
@@ -56,14 +56,31 @@ caching:
   # LangChain LLM cache database
   LANGCHAIN_CACHE_DB: ".langchain.db"
 
-# Retrieval Configuration  
+# Retrieval Configuration
 retrieval:
   # Maximum number of documents to retrieve per query
   MAX_RETRIEVED_DOCS: 5
-  
+
   # BM25 parameters (optional tuning)
   # BM25_K1: 1.5
   # BM25_B: 0.75
+
+  # Minimum BM25 score for a document to be considered relevant.
+  # Documents below this threshold are discarded before prompt injection.
+  # Tune empirically against real queries; set to 0.0 to disable filtering.
+  MIN_BM25_SCORE: 2.0
+
+  # Hybrid retrieval: combine BM25 (keyword) with FAISS (semantic) search
+  HYBRID_ENABLED: true
+  VECTOR_MODEL: "all-MiniLM-L6-v2"
+  RRF_K: 60               # Reciprocal rank fusion constant
+
+# Grounding check
+grounding:
+  # Append a disclaimer when the answer discusses cluster-specific topics
+  # but cites zero retrieved documents
+  GROUNDING_CHECK_ENABLED: true
+  REFUSAL_DISCLAIMER: "Note: This answer may not reflect your cluster's specific configuration. Please verify with the documentation or contact srcc-support@stanford.edu."
 
 # Cluster Documentation Paths
 clusters:

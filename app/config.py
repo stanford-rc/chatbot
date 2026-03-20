@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     
     # Retrieval settings
     MAX_RETRIEVED_DOCS: int = config.get('retrieval', {}).get('MAX_RETRIEVED_DOCS', 5)
+    MIN_BM25_SCORE: float = config.get('retrieval', {}).get('MIN_BM25_SCORE', 2.0)
+    HYBRID_ENABLED: bool = config.get('retrieval', {}).get('HYBRID_ENABLED', False)
+    VECTOR_MODEL: str = config.get('retrieval', {}).get('VECTOR_MODEL', 'all-MiniLM-L6-v2')
+    RRF_K: int = config.get('retrieval', {}).get('RRF_K', 60)
+
+    # Grounding check settings
+    GROUNDING_CHECK_ENABLED: bool = config.get('grounding', {}).get('GROUNDING_CHECK_ENABLED', True)
+    REFUSAL_DISCLAIMER: str = config.get('grounding', {}).get('REFUSAL_DISCLAIMER',
+        "Note: This answer may not reflect your cluster's specific configuration. "
+        "Please verify with the documentation or contact srcc-support@stanford.edu.")
 
     # Server settings
     API_PORT: int = Field(default=config.get('server', {}).get('api_port', 8000), env="API_PORT")
