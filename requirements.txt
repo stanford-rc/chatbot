@@ -1,6 +1,7 @@
 # requirements.txt
 #mistral_inference brings in xformers which whose wheels fail on ARM
 fastapi
+gptqmodel
 uvicorn[standard]
 pydantic-settings
 python-dotenv
