@@ -18,7 +18,7 @@ oak/
 models/
 logs/
 .env
-
+docs/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
