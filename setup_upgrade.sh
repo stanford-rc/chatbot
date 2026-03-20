@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup script for chatbot improvements:
 #   1. Rebuild container (picks up faiss-cpu from requirements.txt)
-#   2. Download Llama 3.1 70B Instruct (4-bit AWQ) from HuggingFace
+#   2. Download Llama 3.3 70B Instruct (4-bit AWQ) from HuggingFace
 #   3. Tune MIN_BM25_SCORE with interactive queries against the running service
 #
 # Usage:
@@ -15,7 +15,7 @@ cd "$(dirname "$0")"
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 MODEL_NAME="ibnzterrell/Meta-Llama-3.3-70B-Instruct-AWQ-INT4"
-MODEL_DIR="$(dirname "$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml'))['model']['path'])")")"
+MODEL_DIR="$(dirname "$(python -c "import yaml; print(yaml.safe_load(open('config.yaml'))['model']['path'])")")"
 MODEL_LOCAL_PATH="$MODEL_DIR/Meta-Llama-3.3-70B-Instruct-AWQ-INT4"
 
 SIF_NAME="chatbot.sif"
@@ -80,19 +80,6 @@ download_model() {
         echo -e "${GREEN}✓ Model already downloaded at $MODEL_LOCAL_PATH${NC}"
         echo "  To re-download, delete the directory first."
     else
-        # Check for huggingface-cli
-        if ! command -v huggingface-cli &>/dev/null; then
-            echo "Installing huggingface_hub CLI..."
-            pip3 install --user huggingface_hub[cli]
-        fi
-
-        echo ""
-        echo "NOTE: This model requires accepting the Llama 3.3 license on HuggingFace."
-        echo "If you haven't already, visit: https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct"
-        echo "and accept the license, then run: huggingface-cli login"
-        echo ""
-        read -r -p "Press Enter to start download (or Ctrl+C to cancel)..."
-
         mkdir -p "$MODEL_LOCAL_PATH"
         huggingface-cli download "$MODEL_NAME" \
             --local-dir "$MODEL_LOCAL_PATH" \
@@ -106,7 +93,7 @@ download_model() {
     echo ""
     echo "Updating config.yaml..."
 
-    python3 -c "
+    python -c "
 import yaml
 
 with open('config.yaml', 'r') as f:
@@ -147,7 +134,7 @@ tune_bm25() {
     echo "This sends test queries to the running service and shows retrieval"
     echo "scores so you can decide on a good MIN_BM25_SCORE threshold."
     echo ""
-    echo "Current threshold: $(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('retrieval',{}).get('MIN_BM25_SCORE', 2.0))")"
+    echo "Current threshold: $(python -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('retrieval',{}).get('MIN_BM25_SCORE', 2.0))")"
     echo ""
 
     # Check if the service is running
@@ -216,7 +203,7 @@ tune_bm25() {
     echo "  jq -r '.answer' $RESULTS_DIR/query_0.json"
     echo ""
     echo "To see BM25 scores, check the worker logs:"
-    LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('logging',{}).get('log_dir','logs'))")
+    LOG_DIR=$(python -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('logging',{}).get('log_dir','logs'))")
     echo "  grep 'BM25' $LOG_DIR/worker1.log | tail -20"
     echo "  grep 'BM25' $LOG_DIR/worker2.log | tail -20"
     echo ""
@@ -231,7 +218,7 @@ tune_bm25() {
     read -r -p "New MIN_BM25_SCORE (or Enter to keep current): " new_score
 
     if [ -n "$new_score" ]; then
-        python3 -c "
+        python -c "
 import yaml
 
 with open('config.yaml', 'r') as f:

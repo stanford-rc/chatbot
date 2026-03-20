@@ -51,7 +51,7 @@ BIND_MOUNTS="--bind $PWD:/workspace"
 # Since model is now in ~/apichatbot/models/ which is under $PWD,
 # it's already accessible. But we can add explicit bind for clarity:
 if [ -d "$MODEL_PATH" ]; then
-    BIND_MOUNTS="$BIND_MOUNTS --bind $MODEL_PATH:$MODEL_PATH:ro"
+    BIND_MOUNTS="$BIND_MOUNTS --bind $MODEL_PATH:$MODEL_PATH"
 fi
 
 echo "Bind mounts: $BIND_MOUNTS"
@@ -62,11 +62,14 @@ apptainer instance start --nv $BIND_MOUNTS $SIF_NAME chatapi
 
 # Quick check
 echo "--- Environment Check ---"
-apptainer exec instance://chatapi /opt/chatbot-env/bin/python -c "
+apptainer exec --nv instance://chatapi /opt/chatbot-env/bin/python -c "
 import torch
-import os
 print(f'PyTorch: {torch.__version__}')
-print(f'Running on: CPU')
+print(f'CUDA available: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'GPU count: {torch.cuda.device_count()}')
+    for i in range(torch.cuda.device_count()):
+        print(f'  GPU {i}: {torch.cuda.get_device_name(i)}')
 print('✓ Container started')
 "
 

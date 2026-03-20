@@ -122,6 +122,11 @@ class RAGService:
         self.tokenizer.pad_token = self.tokenizer.eos_token
         
         # Load model
+        # Pin to specific GPU if WORKER_GPU is set (multi-GPU mode), otherwise use auto
+        worker_gpu = os.environ.get('WORKER_GPU')
+        device_map = {"": worker_gpu} if (worker_gpu and torch.cuda.is_available()) else ("auto" if torch.cuda.is_available() else None)
+        logger.info(f"WORKER_GPU env var: {worker_gpu or 'NOT SET'}, device_map: {device_map}")
+
         if self.settings.USE_QUANTIZATION:
             logger.warning("Quantization enabled - may cause slowdown on ARM architecture")
             bnb_config = BitsAndBytesConfig(
@@ -133,22 +138,18 @@ class RAGService:
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.settings.MODEL_PATH,
                 quantization_config=bnb_config,
-                device_map="auto" if torch.cuda.is_available() else None,
+                device_map=device_map,
                 local_files_only=self.settings.LOCAL_FILES_ONLY,
                 torch_dtype=torch.float16,
             )
         else:
-            logger.info("Loading model in FP16 (recommended for ARM)")
+            logger.info("Loading model with pre-quantized weights (AWQ or similar)")
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.settings.MODEL_PATH,
                 torch_dtype=torch_dtype,
+                device_map=device_map,
                 local_files_only=self.settings.LOCAL_FILES_ONLY
             )
-            if torch.cuda.is_available():
-                logger.info(f"Loading model to device: {self.settings.MODEL_DEVICE}")
-                logger.info(f"WORKER_GPU env var: {os.environ.get('WORKER_GPU', 'NOT SET')}")
-                self.model = self.model.to(self.settings.MODEL_DEVICE)
-                logger.info(f"Model moved to {self.settings.MODEL_DEVICE}")
 
         self.model.eval()  # Set to inference mode
         self.llm = RunnableLambda(self._generate_response)

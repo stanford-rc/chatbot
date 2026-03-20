@@ -7,7 +7,7 @@
 model:
   path: "/home/users/saracook/apichatbot/models/gemma-2-9b-it"
   type: "gemma"
-  device: "cpu"
+  device: "cuda"
   use_quantization: false
   local_files_only: true
 
