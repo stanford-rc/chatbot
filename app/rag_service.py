@@ -118,30 +118,6 @@ class RAGService:
             os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
             logger.info("CUDA_VISIBLE_DEVICES not set — defaulting to 0,1")
 
-        # vLLM 0.18.0 detects its platform via pynvml.nvmlInit(), which fails silently
-        # in Apptainer containers. This makes vLLM fall back to UnspecifiedPlatform
-        # (device_type = ""), crashing LLM() with "Device string must not be empty".
-        #
-        # There is no VLLM_PLATFORM env var in v0.18.0 — platform detection is
-        # purely pynvml-based. The fix is two-pronged:
-        #   1. Patch the class attribute on the existing UnspecifiedPlatform instance
-        #      so all cached 'from vllm.platforms import current_platform' references
-        #      (e.g., in arg_utils.py) see device_type="cuda" immediately.
-        #   2. Replace the module-level current_platform with NonNvmlCudaPlatform so
-        #      any future accesses resolve correctly too.
-        import vllm.platforms as _vllm_plat
-        _cp = _vllm_plat.current_platform
-        if not _cp.device_type:
-            logger.info("vLLM detected UnspecifiedPlatform (pynvml/NVML unavailable in container). "
-                        "Patching to NonNvmlCudaPlatform.")
-            try:
-                from vllm.platforms.cuda import NonNvmlCudaPlatform
-                type(_cp).device_type = "cuda"          # patch cached references
-                _vllm_plat.current_platform = NonNvmlCudaPlatform()  # patch module attr
-            except Exception as _patch_err:
-                logger.warning(f"Full platform patch failed ({_patch_err}); applying device_type only.")
-                type(_cp).device_type = "cuda"
-
         self.model = LLM(
             model=self.settings.MODEL_PATH,
             quantization="awq",
