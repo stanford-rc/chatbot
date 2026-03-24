@@ -50,7 +50,68 @@ from: python:3.11-slim
     deactivate
 
     uv cache clean
-    
+
+    # ── Patch vLLM for Apptainer NVML compatibility ──────────────────────────
+    # vLLM 0.18.0 uses a vendored pynvml to detect CUDA. pynvml.nvmlInit() fails
+    # in Apptainer containers because NVML is not accessible, causing vLLM to fall
+    # back to UnspecifiedPlatform (device_type="") and crash on startup.
+    #
+    # Patch 1: replace cuda_platform_plugin() to use torch.cuda.is_available()
+    # Patch 2: force NonNvmlCudaPlatform so runtime capability queries also use
+    #          torch.cuda (no pynvml calls during inference)
+    /opt/chatbot-env/bin/python3 - << 'PYEOF'
+import re, sys
+
+# ── Patch 1: vllm/platforms/__init__.py ──────────────────────────────────────
+path1 = '/opt/chatbot-env/lib/python3.11/site-packages/vllm/platforms/__init__.py'
+with open(path1) as f:
+    src = f.read()
+
+old1 = '''def cuda_platform_plugin() -> str | None:
+    is_cuda = False
+    logger.debug("Checking if CUDA platform is available.")'''
+
+new1 = '''def cuda_platform_plugin() -> str | None:
+    # Patched for Apptainer: pynvml.nvmlInit() fails in containers.
+    # Use torch.cuda.is_available() which works without NVML.
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "vllm.platforms.cuda.CudaPlatform"
+    except Exception as e:
+        logger.debug("CUDA check failed: %s", e)
+    return None
+    # Original unreachable:
+    is_cuda = False
+    logger.debug("Checking if CUDA platform is available.")'''
+
+if old1 in src:
+    with open(path1, 'w') as f:
+        f.write(src.replace(old1, new1))
+    print("✓ Patched vllm/platforms/__init__.py")
+elif 'Patched for Apptainer' in src:
+    print("✓ vllm/platforms/__init__.py already patched")
+else:
+    print("✗ Pattern not found in __init__.py — manual patch needed", file=sys.stderr)
+
+# ── Patch 2: vllm/platforms/cuda.py ──────────────────────────────────────────
+path2 = '/opt/chatbot-env/lib/python3.11/site-packages/vllm/platforms/cuda.py'
+with open(path2) as f:
+    src = f.read()
+
+old2 = 'CudaPlatform = NvmlCudaPlatform if nvml_available else NonNvmlCudaPlatform'
+new2 = 'CudaPlatform = NonNvmlCudaPlatform  # Patched: pynvml unavailable in Apptainer'
+
+if old2 in src:
+    with open(path2, 'w') as f:
+        f.write(src.replace(old2, new2))
+    print("✓ Patched vllm/platforms/cuda.py")
+elif 'Patched: pynvml unavailable' in src:
+    print("✓ vllm/platforms/cuda.py already patched")
+else:
+    print("✗ Pattern not found in cuda.py — manual patch needed", file=sys.stderr)
+PYEOF
+
     # Verify /opt/chatbot-env/bin/python is available
     which /opt/chatbot-env/bin/python
     /opt/chatbot-env/bin/python --version
