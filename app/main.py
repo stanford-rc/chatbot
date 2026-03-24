@@ -1,9 +1,14 @@
 import os
-# Must be set before vllm is imported (read at import time, not at LLM() call time).
-# NVML fails to initialize in Apptainer containers, so vLLM's auto-detection returns
-# an empty device string. This overrides that before any vllm module is imported.
-os.environ.setdefault('VLLM_PLATFORM', 'cuda')
 os.environ.setdefault('HF_HUB_OFFLINE', '1')
+
+# vLLM 0.18.0 detects its platform lazily via pynvml.nvmlInit(). In Apptainer
+# containers NVML silently fails, so vLLM falls back to UnspecifiedPlatform
+# (device_type = ""). There is no runtime env var to override this in v0.18.0.
+# Fix: directly assign NonNvmlCudaPlatform before the lazy detection fires.
+# NonNvmlCudaPlatform has device_type="cuda" and uses torch.cuda.* (no NVML needed).
+import vllm.platforms
+from vllm.platforms.cuda import NonNvmlCudaPlatform
+vllm.platforms.current_platform = NonNvmlCudaPlatform()
 
 import logging
 from contextlib import asynccontextmanager

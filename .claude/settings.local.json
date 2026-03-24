@@ -23,7 +23,12 @@
       "WebFetch(domain:forums.developer.nvidia.com)",
       "WebFetch(domain:www.1ou2.com)",
       "WebFetch(domain:mgoin.github.io)",
-      "WebFetch(domain:api.github.com)"
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/__init__.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/cuda.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/envs.py)",
+      "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/interface.py)"
     ]
   }
 }
