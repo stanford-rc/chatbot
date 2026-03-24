@@ -122,10 +122,22 @@ class RAGService:
             model=self.settings.MODEL_PATH,
             quantization="awq_marlin",   # faster than awq; avoids awq_dequantize kernel path
             dtype="half",
-            gpu_memory_utilization=0.85,
-            max_model_len=8192,
-            enforce_eager=True,          # skip CUDA graph capture; avoids CUDACachingAllocator
-                                         # NVML assertion at CUDACachingAllocator.cpp:1124
+            gpu_memory_utilization=0.92,  # raised from 0.85: eager-mode profiling pass for
+                                          # Qwen2.5-32B at 4096-token context consumes ~24 GB
+                                          # in activations; 0.85×48=40.8 GB leaves negative
+                                          # headroom; 0.92×48=44.2 GB clears the check
+            max_model_len=4096,           # halved from 8192; sufficient for documentation Q&A
+                                          # and directly reduces profiling-pass activation memory
+            enforce_eager=True,          # ⚠ KNOWN LIMITATION: CUDA graph capture disabled.
+                                         # PyTorch's CUDACachingAllocator asserts nvmlInit_v2_()
+                                         # succeeds at CUDACachingAllocator.cpp:1124 during graph
+                                         # warmup. In Apptainer containers, NVML (libnvidia-ml.so)
+                                         # is accessible for CUDA compute but the management API
+                                         # fails to initialize, triggering this hard C++ assert.
+                                         # Restoring CUDA graphs requires fixing NVML in the
+                                         # container (verify libnvidia-ml.so version matches host
+                                         # driver, or file a bug with the PyTorch CUDA team).
+                                         # Perf impact: ~5-15% higher per-token latency vs graphs.
             disable_log_stats=True,
         )
         self.tokenizer = self.model.get_tokenizer()

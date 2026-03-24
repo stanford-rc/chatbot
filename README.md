@@ -386,6 +386,24 @@ apichatbot/
 
 ---
 
+## Known Limitations
+
+### ⚠ CUDA Graphs Disabled (`enforce_eager=True`)
+
+vLLM is running with `enforce_eager=True`, which disables `torch.compile` and CUDA graph capture.
+
+**Root cause:** PyTorch's `CUDACachingAllocator` (c10/cuda/CUDACachingAllocator.cpp:1124) contains a hard C++ assertion that `nvmlInit_v2_()` succeeds before any CUDA memory operation can proceed during graph warmup. In Apptainer containers on ada-lovelace, the NVML management library (`libnvidia-ml.so`) fails to initialize — CUDA compute works normally, but the NVIDIA Management Library (used for device monitoring, memory stats, and driver queries) is inaccessible. When vLLM attempts CUDA graph capture, the allocator hits this assertion and aborts.
+
+**Impact:** ~5–15% higher per-token latency compared to CUDA-graph-optimized inference. For a documentation chatbot this is acceptable, but it is a regression from the intended production configuration.
+
+**To restore CUDA graphs:**
+1. Verify `libnvidia-ml.so` is accessible inside the container: `apptainer exec --nv instance://chatapi ldconfig -p | grep nvidia-ml`
+2. Check that the container's NVML version matches the host driver: `nvidia-smi` (host) vs the `.so` version bound in by `--nv`
+3. If NVML is missing, file an issue with SRCC — `--nv` should bind `libnvidia-ml.so` from the host
+4. Once NVML initializes cleanly (no "Can't initialize NVML" warnings in worker logs), remove `enforce_eager=True` from the `LLM()` call in `app/rag_service.py`
+
+---
+
 ## Notes
 
 - Container must be rebuilt after changing `chatbot.def`
