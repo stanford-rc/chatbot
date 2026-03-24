@@ -1,5 +1,11 @@
-import logging
 import os
+# Must be set before vllm is imported (read at import time, not at LLM() call time).
+# NVML fails to initialize in Apptainer containers, so vLLM's auto-detection returns
+# an empty device string. This overrides that before any vllm module is imported.
+os.environ.setdefault('VLLM_PLATFORM', 'cuda')
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
+
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException # pyright: ignore[reportMissingImports]
