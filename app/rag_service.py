@@ -122,12 +122,17 @@ class RAGService:
             model=self.settings.MODEL_PATH,
             quantization="awq_marlin",   # faster than awq; avoids awq_dequantize kernel path
             dtype="half",
-            gpu_memory_utilization=0.92,  # raised from 0.85: eager-mode profiling pass for
-                                          # Qwen2.5-32B at 4096-token context consumes ~24 GB
-                                          # in activations; 0.85×48=40.8 GB leaves negative
-                                          # headroom; 0.92×48=44.2 GB clears the check
-            max_model_len=4096,           # halved from 8192; sufficient for documentation Q&A
-                                          # and directly reduces profiling-pass activation memory
+            gpu_memory_utilization=0.92,
+            max_model_len=8192,
+            num_gpu_blocks_override=2048, # ⚠ bypasses vLLM's KV-cache memory calculation.
+                                          # With NVML failing in Apptainer, the eager-mode
+                                          # profiling pass reports ~25 GB of phantom overhead
+                                          # (model=18 GiB, GPU=48 GiB, yet reports 0.48 GiB
+                                          # available). Physical memory is fine: 18 GiB model
+                                          # + 2048×4.2 MiB KV cache ≈ 26.6 GiB on a 48 GiB GPU.
+                                          # 2048 blocks × 16 tokens = 32K token slots total
+                                          # (~4 concurrent 8192-token requests).
+                                          # Remove once NVML is fixed and profiling is accurate.
             enforce_eager=True,          # ⚠ KNOWN LIMITATION: CUDA graph capture disabled.
                                          # PyTorch's CUDACachingAllocator asserts nvmlInit_v2_()
                                          # succeeds at CUDACachingAllocator.cpp:1124 during graph
