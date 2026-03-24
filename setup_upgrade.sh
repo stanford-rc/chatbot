@@ -15,7 +15,7 @@ cd "$(dirname "$0")"
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 MODEL_NAME="Qwen/Qwen2.5-32B-Instruct-AWQ"
-MODEL_DIR="$(dirname "$(python -c "import yaml; print(yaml.safe_load(open('config.yaml'))['model']['path'])")")"
+MODEL_DIR="$(dirname "$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml'))['model']['path'])")")"
 if [[ "$MODEL_DIR" != /* ]]; then
     echo "ERROR: MODEL_DIR ('$MODEL_DIR') is not an absolute path."
     echo "       Check that config.yaml model.path is set to a full path before running."
@@ -98,7 +98,7 @@ download_model() {
     echo ""
     echo "Updating config.yaml..."
 
-    python -c "
+    python3 -c "
 import yaml
 
 with open('config.yaml', 'r') as f:
@@ -139,7 +139,7 @@ tune_bm25() {
     echo "This sends test queries to the running service and shows retrieval"
     echo "scores so you can decide on a good MIN_BM25_SCORE threshold."
     echo ""
-    echo "Current threshold: $(python -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('retrieval',{}).get('MIN_BM25_SCORE', 2.0))")"
+    echo "Current threshold: $(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('retrieval',{}).get('MIN_BM25_SCORE', 2.0))")"
     echo ""
 
     # Check if the service is running
@@ -208,7 +208,7 @@ tune_bm25() {
     echo "  jq -r '.answer' $RESULTS_DIR/query_0.json"
     echo ""
     echo "To see BM25 scores, check the worker logs:"
-    LOG_DIR=$(python -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('logging',{}).get('log_dir','logs'))")
+    LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml')).get('logging',{}).get('log_dir','logs'))")
     echo "  grep 'BM25' $LOG_DIR/worker1.log | tail -20"
     echo "  grep 'BM25' $LOG_DIR/worker2.log | tail -20"
     echo ""
