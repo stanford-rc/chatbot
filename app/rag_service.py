@@ -120,10 +120,13 @@ class RAGService:
 
         self.model = LLM(
             model=self.settings.MODEL_PATH,
-            quantization="awq",
+            quantization="awq_marlin",   # faster than awq; avoids awq_dequantize kernel path
             dtype="half",
             gpu_memory_utilization=0.85,
             max_model_len=8192,
+            enforce_eager=True,          # skip CUDA graph capture; avoids CUDACachingAllocator
+                                         # NVML assertion at CUDACachingAllocator.cpp:1124
+            disable_log_stats=True,
         )
         self.tokenizer = self.model.get_tokenizer()
         self.llm = RunnableLambda(self._generate_response)
