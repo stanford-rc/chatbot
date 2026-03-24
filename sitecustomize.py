@@ -111,7 +111,20 @@ def _build_pynvml_shim():
 
 _shim = _build_pynvml_shim()
 
+# vllm.third_party does NOT exist as a real package in the ARM64+cu130 vLLM
+# 0.18.0 wheel. Python's import system requires every component of a dotted
+# path to be resolvable before the leaf. If 'vllm.third_party' isn't in
+# sys.modules, `import vllm.third_party.pynvml` triggers a filesystem lookup
+# for vllm/third_party/__init__.py — which doesn't exist — and raises:
+#   ImportError: cannot import name 'third_party' from 'vllm'
+# Fix: inject a fake package for the parent so Python skips the filesystem.
+_third_party_mod = types.ModuleType("vllm.third_party")
+_third_party_mod.__path__ = []          # presence of __path__ (even empty) marks it as a package
+_third_party_mod.__package__ = "vllm.third_party"
+_third_party_mod.pynvml = _shim        # convenience attribute
+
 # Inject as both the vendored path vLLM uses and the bare 'pynvml' name.
 # setdefault so we never overwrite a real module if already imported.
+sys.modules.setdefault("vllm.third_party", _third_party_mod)
 sys.modules.setdefault("vllm.third_party.pynvml", _shim)
 sys.modules.setdefault("pynvml", _shim)
