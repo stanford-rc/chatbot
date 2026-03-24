@@ -119,11 +119,13 @@ class RAGService:
             os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
             logger.info("CUDA_VISIBLE_DEVICES not set — defaulting to 0,1")
 
+        # Explicitly set platform so vLLM doesn't rely on NVML for detection
+        os.environ.setdefault('VLLM_PLATFORM', 'cuda')
+
         self.model = LLM(
             model=self.settings.MODEL_PATH,
             quantization="awq",
             dtype="half",
-            device="cuda",
             gpu_memory_utilization=0.85,
             max_model_len=8192,
         )
