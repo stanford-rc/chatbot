@@ -90,6 +90,7 @@ else
     echo "API docs: http://$HOST:$PORT/docs"
     echo ""
 
+    APPTAINERENV_VLLM_PLATFORM=cuda \
     apptainer exec --nv instance://chatapi \
         /opt/chatbot-env/bin/python -m uvicorn app.main:app \
         --host 0.0.0.0 \

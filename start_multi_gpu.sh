@@ -79,7 +79,9 @@ wait_for_worker() {
 # Start Worker 1
 echo ""
 echo "Starting Worker 1 ($WORKER1_GPU) on port $WORKER1_PORT..."
-APPTAINERENV_WORKER_GPU=$WORKER1_GPU apptainer exec --nv instance://chatapi \
+APPTAINERENV_WORKER_GPU=$WORKER1_GPU \
+APPTAINERENV_VLLM_PLATFORM=cuda \
+apptainer exec --nv instance://chatapi \
   /opt/chatbot-env/bin/python -m uvicorn app.main:app \
   --host 127.0.0.1 \
   --port $WORKER1_PORT \
@@ -102,7 +104,9 @@ fi
 # Start Worker 2
 echo ""
 echo "Starting Worker 2 ($WORKER2_GPU) on port $WORKER2_PORT..."
-APPTAINERENV_WORKER_GPU=$WORKER2_GPU apptainer exec --nv instance://chatapi \
+APPTAINERENV_WORKER_GPU=$WORKER2_GPU \
+APPTAINERENV_VLLM_PLATFORM=cuda \
+apptainer exec --nv instance://chatapi \
   /opt/chatbot-env/bin/python -m uvicorn app.main:app \
   --host 127.0.0.1 \
   --port $WORKER2_PORT \
