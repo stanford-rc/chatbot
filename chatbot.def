@@ -13,6 +13,8 @@ from: python:3.11-slim
 %environment
     export PATH=/usr/local/cuda/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    export VLLM_PLATFORM=cuda
+    export HF_HUB_OFFLINE=1
     
 %post
     apt update && apt -y full-upgrade

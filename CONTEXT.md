@@ -75,14 +75,22 @@ Llama 3.3 70B AWQ = ~35GB, doesn't fit on a single L4 (24GB). Qwen 2.5 32B AWQ =
 ---
 
 ## State When User Left
-The container was being rebuilt with `vllm` in requirements.txt. The user ran `./start_multi_gpu.sh` (or was about to) to test workers. **This is the first time vLLM will be attempted.**
+Workers were failing with `RuntimeError: Device string must not be empty` from vLLM's platform detection. Root cause: NVML cannot initialize in Apptainer (`Can't initialize NVML`), so `current_platform.device_type` returns empty string. `APPTAINERENV_VLLM_PLATFORM=cuda` was added to launch scripts but didn't resolve it (env var injection through the exec chain wasn't reaching vLLM at import time).
+
+**Fix applied (needs rebuild):** Added `VLLM_PLATFORM=cuda` and `HF_HUB_OFFLINE=1` directly to `chatbot.def` `%environment` section. This bakes both vars into the container itself — no reliance on `APPTAINERENV_` prefix mechanics. After pushing, rebuild on the cluster:
+```bash
+apptainer instance stop chatapi 2>/dev/null || true
+rm chatbot.sif
+apptainer build chatbot.sif chatbot.def
+./main.sh multi
+```
 
 ### Most Likely Issues to Hit Next Session
-1. **vLLM install** — handled. vLLM is installed from the official pre-built `cu130+aarch64` wheel directly in `chatbot.def`, bypassing PyPI resolution entirely (PyPI serves vllm==0.6.5 which requires torch==2.5.1; the cu130 wheel is vllm==0.18.0 which requires torch==2.10.0). Wheel URL: `https://github.com/vllm-project/vllm/releases/download/v0.18.0/vllm-0.18.0%2Bcu130-cp38-abi3-manylinux_2_35_aarch64.whl`. **Do not add vllm to requirements.txt** — it must stay as the explicit def file install.
-2. **`local_files_only` not supported by vLLM** — the `LLM()` constructor in rag_service.py currently doesn't pass `local_files_only`. If vLLM tries to contact HuggingFace and fails, add `--offline` mode or set `TRANSFORMERS_OFFLINE=1` env var.
+1. **Container rebuild required** — `chatbot.def` was updated (VLLM_PLATFORM baked in). Must rebuild before workers will start.
+2. **vLLM install** — handled. vLLM 0.18.0+cu130 installed from GitHub release wheel in chatbot.def. **Do not add vllm to requirements.txt.**
 3. **vLLM + multi-worker conflict** — vLLM uses its own process pool internally. Two separate uvicorn processes each running a `LLM()` instance should be fine since `CUDA_VISIBLE_DEVICES` isolates them, but watch worker2.log for NCCL/CUDA errors.
-4. **Qwen model not fully downloaded** — the download was in progress. Verify: `ls -lh /home/users/bcritt/apichatbot/models/Qwen2.5-32B-Instruct-AWQ/` should show ~9 safetensors files totaling ~19GB.
-5. **`config.yaml` model path** — double-check the cluster's config.yaml still has the Qwen path (earlier pulls reset it to Sara's Gemma path). Should be: `path: "/home/users/bcritt/apichatbot/models/Qwen2.5-32B-Instruct-AWQ"`
+4. **Qwen model** — verify complete: `ls -lh /home/users/bcritt/apichatbot/models/Qwen2.5-32B-Instruct-AWQ/` should show ~9 safetensors files totaling ~19GB.
+5. **`config.yaml` model path** — git pulls keep resetting to Sara's Gemma path. After pull, verify: `grep path: config.yaml` should show Qwen path. Fix if needed: `sed -i 's|path:.*|path: /home/users/bcritt/apichatbot/models/Qwen2.5-32B-Instruct-AWQ|' config.yaml`
 
 ### Diagnostic Commands
 ```bash
@@ -116,7 +124,7 @@ curl -s -X POST http://localhost:8001/query/ \
 ### Known Remaining Issues
 - **Old Llama model directory mess** — `/home/users/bcritt/apichatbot/models/Meta-Llama-3.3-70B-Instruct-AWQ-INT4/` contains an HF cache from `all-MiniLM-L6-v2` accidentally written there (when HF_HOME pointed to the wrong path). Safe to delete the whole directory.
 - **Stray `Qwen2.5-32B-Instruct-AWQ/` in working dir** — caused by `setup_upgrade.sh` running when `config.yaml` had the old Gemma/Llama model path; `dirname` of a relative or wrong path returns `.`, so the download landed in `/srv/scratch/bcritt/chatbot/Qwen2.5-32B-Instruct-AWQ/`. Safe to delete: `rm -rf /srv/scratch/bcritt/chatbot/Qwen2.5-32B-Instruct-AWQ`. A path guard was added to `setup_upgrade.sh` to prevent recurrence.
-- **`local_files_only` not in vLLM call** — should add `TRANSFORMERS_OFFLINE=1` to worker env to prevent HF network calls, or find vLLM equivalent.
+- **`HF_HUB_OFFLINE=1`** — now baked into container via chatbot.def `%environment`. No HF network calls from inside the container after rebuild.
 - **Semantic cache WAL mode** — only applies to new connections after the PRAGMA. If the DB was created before this change, `PRAGMA journal_mode=WAL` needs to run once against the existing file: `sqlite3 .response_cache.db "PRAGMA journal_mode=WAL;"`
 
 ---
