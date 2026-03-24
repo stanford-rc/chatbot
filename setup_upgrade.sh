@@ -16,6 +16,11 @@ cd "$(dirname "$0")"
 # ─── Configuration ───────────────────────────────────────────────────────────
 MODEL_NAME="Qwen/Qwen2.5-32B-Instruct-AWQ"
 MODEL_DIR="$(dirname "$(python -c "import yaml; print(yaml.safe_load(open('config.yaml'))['model']['path'])")")"
+if [[ "$MODEL_DIR" != /* ]]; then
+    echo "ERROR: MODEL_DIR ('$MODEL_DIR') is not an absolute path."
+    echo "       Check that config.yaml model.path is set to a full path before running."
+    exit 1
+fi
 MODEL_LOCAL_PATH="$MODEL_DIR/Qwen2.5-32B-Instruct-AWQ"
 
 SIF_NAME="chatbot.sif"

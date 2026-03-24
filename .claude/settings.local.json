@@ -12,7 +12,18 @@
       "WebFetch(domain:llm-stats.com)",
       "WebFetch(domain:apxml.com)",
       "WebFetch(domain:qwenlm.github.io)",
-      "WebFetch(domain:qwen.readthedocs.io)"
+      "WebFetch(domain:qwen.readthedocs.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:docs.nvidia.com)",
+      "WebFetch(domain:catalog.ngc.nvidia.com)",
+      "WebFetch(domain:docs.vllm.ai)",
+      "WebFetch(domain:discuss.vllm.ai)",
+      "WebFetch(domain:wheels.vllm.ai)",
+      "WebFetch(domain:forums.developer.nvidia.com)",
+      "WebFetch(domain:www.1ou2.com)",
+      "WebFetch(domain:mgoin.github.io)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }

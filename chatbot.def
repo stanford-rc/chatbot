@@ -41,6 +41,11 @@ from: python:3.11-slim
     uv venv --system-site-packages /opt/chatbot-env
     . /opt/chatbot-env/bin/activate
     uv pip install --torch-backend=cu130 --requirements /workspace/requirements.txt
+    # vLLM must be installed from the pre-built cu130 aarch64 wheel — uv resolves
+    # vllm==0.6.5 (wrong) from PyPI because it doesn't know about the cu130 index.
+    # The official 0.18.0+cu130 wheel ships ARM64 kernels and requires torch==2.10.0.
+    uv pip install --torch-backend=cu130 \
+        https://github.com/vllm-project/vllm/releases/download/v0.18.0/vllm-0.18.0%2Bcu130-cp38-abi3-manylinux_2_35_aarch64.whl
     deactivate
 
     uv cache clean
