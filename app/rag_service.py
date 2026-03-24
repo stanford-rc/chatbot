@@ -109,16 +109,21 @@ class RAGService:
 
         # Restrict this worker to its designated GPU via CUDA_VISIBLE_DEVICES.
         # Must be set before vLLM initialises its CUDA context.
+        # Also ensures vLLM can detect CUDA on systems where NVML is unavailable.
         worker_gpu = os.environ.get('WORKER_GPU', '')
         if worker_gpu.startswith('cuda:'):
             gpu_id = worker_gpu.split(':')[1]
             os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
             logger.info(f"Restricting to GPU {gpu_id} via CUDA_VISIBLE_DEVICES")
+        elif 'CUDA_VISIBLE_DEVICES' not in os.environ:
+            os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
+            logger.info("CUDA_VISIBLE_DEVICES not set — defaulting to 0,1")
 
         self.model = LLM(
             model=self.settings.MODEL_PATH,
             quantization="awq",
             dtype="half",
+            device="cuda",
             gpu_memory_utilization=0.85,
             max_model_len=8192,
         )
