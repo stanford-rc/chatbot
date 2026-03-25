@@ -115,31 +115,42 @@ class RAGService:
         logger.info("Tensor parallel mode: exposing both GPUs (CUDA_VISIBLE_DEVICES=0,1)")
 
         # vLLM's internal RPC timeout between EngineCore and GPU WorkerProcs.
-        # Default is ~10 s, which is not enough for the first forward pass on a
-        # 32B model (NCCL initialisation, Marlin kernel warm-up, etc.).
         # setdefault so an explicit env override from the launch environment wins.
-        os.environ.setdefault('VLLM_RPC_TIMEOUT', '300000')   # 5 min (ms)
-        os.environ.setdefault('VLLM_WORKER_MULTIPROC_TIMEOUT', '600')  # 10 min (s)
+        os.environ.setdefault('VLLM_RPC_TIMEOUT', '300000')          # 5 min (ms)
+        os.environ.setdefault('VLLM_WORKER_MULTIPROC_TIMEOUT', '600') # 10 min (s)
+
+        # L4 GPUs are PCIe-only (no NVLink).  NCCL can hang probing P2P paths
+        # inside Apptainer containers where PCIe peer access may be restricted.
+        # P2P=disabled forces NCCL to use host shared-memory transport instead,
+        # which is slower (~PCIe bandwidth) but works reliably on any topology.
+        os.environ.setdefault('NCCL_P2P_DISABLE', '1')
+        os.environ.setdefault('NCCL_DEBUG', 'WARN')  # surface NCCL errors in log
 
         self.model = LLM(
             model=self.settings.MODEL_PATH,
-            quantization="awq_marlin",
+            # Use AWQ kernels directly.  awq_marlin converts weights to Marlin
+            # format at startup via synchronous CUDA kernels; for 32B with TP=2
+            # this can take 5-15 minutes and blocks workers from reading the
+            # EngineCore's shm broadcast channel, causing repeated
+            # "No available shared memory broadcast block" warnings that look
+            # like a hang but are actually just the conversion in progress.
+            # Switching to plain awq skips conversion entirely; throughput
+            # difference is negligible for a chatbot (long prompts, low concurrency).
+            quantization="awq",
             dtype="half",
             # Tensor parallel across 2× NVIDIA L4 (22.5 GiB each).
             # Model shard per GPU: ~9 GiB.  Free per GPU: ~13.5 GiB.
             # KV cache budget: 0.90 × 22.5 × 2 − 18.14 ≈ 22.3 GiB total.
-            # At max_model_len=4096 (~1 GiB KV/request): ~20+ concurrent requests.
-            # vLLM continuous batching handles all concurrency — no nginx needed.
+            # At max_model_len=4096: Qwen 32B KV ≈ 256 KB/token × 4096 = 1 GiB/request
+            # → ~20+ concurrent requests at this context length.
             tensor_parallel_size=2,
             gpu_memory_utilization=0.90,
             max_model_len=4096,
             # enforce_eager=True disables CUDA graph capture.
             # Without it, the first real inference request triggers graph capture
-            # on both GPU shards simultaneously (can take 2-5 min for 32B).
-            # The EngineCore→WorkerProc RPC times out while waiting for the workers
-            # to finish capture, even with VLLM_RPC_TIMEOUT raised.
-            # For a chatbot workload (long prompts, few concurrent users) the
-            # throughput difference vs. graphs is negligible.
+            # on both GPU shards simultaneously (2-5 min for 32B), and the
+            # EngineCore→WorkerProc RPC times out waiting for the workers.
+            # Throughput difference vs. graphs is negligible for this workload.
             enforce_eager=True,
             disable_log_stats=True,
         )
