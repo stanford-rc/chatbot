@@ -303,9 +303,21 @@ class RAGService:
             if not retrieved_docs:
                 return "No relevant documents were found for this query."
 
+            def _clean_content(text: str) -> str:
+                # Sherlock/Farmshare docs use Markdown reference variables:
+                #   [Scheduling on Sherlock][url_scheduling]
+                #   [url_scheduling]: https://...
+                # The model copies these anchor texts as citations instead of
+                # using the document's own title from the header below.
+                # Strip reference notation so the model sees plain prose and
+                # must use the '--- Document: Title ---' header to cite.
+                text = re.sub(r'\[([^\]]+)\]\[[^\]]*\]', r'\1', text)   # [text][ref] → text
+                text = re.sub(r'\[url_[^\]]+\](?::[^\n]*)?\n?', '', text)  # [url_xxx]: ... lines
+                return text
+
             # Format with title so LLM can cite by title
             return "\n\n".join(
-                f"--- Document: {doc.metadata.get('title', doc.metadata.get('source', 'Unknown'))} ---\n{doc.page_content}"
+                f"--- Document: {doc.metadata.get('title', doc.metadata.get('source', 'Unknown'))} ---\n{_clean_content(doc.page_content)}"
                 for doc in retrieved_docs
             )
 
