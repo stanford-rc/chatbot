@@ -39,9 +39,9 @@ PASS=0; FAIL=0; WARN=0
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 
-pass() { echo -e "${GREEN}✓${NC} $*"; ((PASS++)); }
-fail() { echo -e "${RED}✗${NC} $*"; ((FAIL++)); }
-warn() { echo -e "${YELLOW}⚠${NC}  $*"; ((WARN++)); }
+pass() { echo -e "${GREEN}✓${NC} $*"; PASS=$((PASS+1)); }
+fail() { echo -e "${RED}✗${NC} $*"; FAIL=$((FAIL+1)); }
+warn() { echo -e "${YELLOW}⚠${NC}  $*"; WARN=$((WARN+1)); }
 section() { echo ""; echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; echo -e "${CYAN}$*${NC}"; echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
 
 query() {
@@ -282,9 +282,14 @@ t_par=$(( SECONDS - t_par_start ))
 
 all_ok=true
 for f in par1 par2 par3; do
-    [[ -s "$RESULTS_DIR/$f.json" ]] || { fail "$f.json empty — request failed"; all_ok=false; }
+    if [[ ! -s "$RESULTS_DIR/$f.json" ]]; then
+        fail "$f.json empty — request failed"
+        all_ok=false
+    fi
 done
-$all_ok && pass "All 3 concurrent requests returned responses in ${t_par}s total"
+if $all_ok; then
+    pass "All 3 concurrent requests returned responses in ${t_par}s total"
+fi
 
 
 # ── Summary ────────────────────────────────────────────────────────────────
