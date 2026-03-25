@@ -50,11 +50,12 @@ caching:
   # Recommended: 0.70-0.75 for good semantic matching
   SEMANTIC_CACHE_THRESHOLD: 0.70
   
-  # Cache database file path
-  SEMANTIC_CACHE_DB: ".response_cache.db"
-  
+  # Cache database file path — absolute /workspace/ path so the file lands in the
+  # bind-mounted host directory regardless of CWD inside the Apptainer container.
+  SEMANTIC_CACHE_DB: "/workspace/.response_cache.db"
+
   # LangChain LLM cache database
-  LANGCHAIN_CACHE_DB: ".langchain.db"
+  LANGCHAIN_CACHE_DB: "/workspace/.langchain.db"
 
 # Retrieval Configuration
 retrieval:

@@ -104,34 +104,28 @@ class RAGService:
             self.semantic_cache = None
 
     def _load_model(self):
-        """Load the language model via vLLM."""
+        """Load the language model via vLLM with tensor parallelism across both GPUs."""
         logger.info(f"Loading model with vLLM from {self.settings.MODEL_PATH}...")
 
-        # Restrict this worker to its designated GPU via CUDA_VISIBLE_DEVICES.
-        # Must be set before vLLM initialises its CUDA context.
-        worker_gpu = os.environ.get('WORKER_GPU', '')
-        if worker_gpu.startswith('cuda:'):
-            gpu_id = worker_gpu.split(':')[1]
-            os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
-            logger.info(f"Restricting to GPU {gpu_id} via CUDA_VISIBLE_DEVICES")
-        elif 'CUDA_VISIBLE_DEVICES' not in os.environ:
-            os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
-            logger.info("CUDA_VISIBLE_DEVICES not set — defaulting to 0,1")
+        # Tensor parallel across both L4 GPUs.  Both must be visible to vLLM.
+        # Override any per-worker CUDA_VISIBLE_DEVICES restriction — TP=2 requires
+        # both GPUs in a single process; the old two-worker nginx architecture is
+        # replaced by vLLM's native async scheduler and continuous batching.
+        os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
+        logger.info("Tensor parallel mode: exposing both GPUs (CUDA_VISIBLE_DEVICES=0,1)")
 
         self.model = LLM(
             model=self.settings.MODEL_PATH,
-            quantization="awq_marlin",   # faster than awq; avoids awq_dequantize kernel path
+            quantization="awq_marlin",
             dtype="half",
-            # GPU: 2× NVIDIA L4, 22.5 GiB each.  Model (Qwen2.5-32B AWQ) = ~18.1 GiB.
-            # Budget at 0.95 utilisation: 0.95 × 22.5 = 21.4 GiB.
-            # Available for KV cache after model load: ~3.3 GiB
-            #   (sitecustomize.py Shim 2 flushes PyTorch's caching allocator before
-            #    vLLM reads free memory, preventing ~2 GiB of phantom AWQ→Marlin
-            #    conversion overhead from being counted as "used").
-            # KV cache per request at max_model_len=4096: ~1.0 GiB → ~3 concurrent requests.
-            gpu_memory_utilization=0.95,
-            max_model_len=4096,          # hardware-appropriate for L4; 8192 would leave room
-                                         # for only 1 concurrent request on 22.5 GiB VRAM.
+            # Tensor parallel across 2× NVIDIA L4 (22.5 GiB each).
+            # Model shard per GPU: ~9 GiB.  Free per GPU: ~13.5 GiB.
+            # KV cache budget: 0.95 × 22.5 × 2 − 18.14 ≈ 24.6 GiB total.
+            # At max_model_len=8192 (~2 GiB KV/request): ~12 concurrent requests.
+            # vLLM continuous batching handles all concurrency — no nginx needed.
+            tensor_parallel_size=2,
+            gpu_memory_utilization=0.90,
+            max_model_len=8192,
             disable_log_stats=True,
         )
         self.tokenizer = self.model.get_tokenizer()
