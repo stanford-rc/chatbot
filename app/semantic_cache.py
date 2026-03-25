@@ -41,10 +41,11 @@ class SemanticResponseCache:
         self.db_path = Path(db_path).resolve()  # absolute so CWD changes can't misdirect connections
         self.similarity_threshold = similarity_threshold
         
-        # Load embedding model (80MB, runs on CPU)
-        logger.info(f"Loading embedding model: {model_name}")
-        self.model = SentenceTransformer(model_name)
-        logger.info("✓ Embedding model loaded")
+        # Load embedding model on CPU — GPU is reserved entirely for the LLM.
+        # all-MiniLM-L6-v2 is 90 MB and fast enough on CPU for cache lookups.
+        logger.info(f"Loading embedding model (CPU): {model_name}")
+        self.model = SentenceTransformer(model_name, device='cpu')
+        logger.info("✓ Embedding model loaded on CPU")
         
         # Initialize database
         self._init_db()
