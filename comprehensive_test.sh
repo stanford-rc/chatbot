@@ -157,9 +157,10 @@ jq -r '.sources[] | "    • \(.title)  \(.url // "(no url)")"' "$RESULTS_DIR/ci
 
 # ── Test 3: Grounding Guard ────────────────────────────────────────────────
 section "TEST 3 — Grounding / Hallucination Guard"
-# Send a vague or off-topic question that is unlikely to retrieve any
-# matching docs.  If GROUNDING_CHECK_ENABLED, the answer should include
-# the srcc-support disclaimer when the model goes off-script.
+# 3a. Completely off-topic question — model should refuse with one sentence
+#     and NOT answer the question at all.
+# 3b. HPC-related but likely ungrounded — model should answer helpfully and
+#     include the srcc-support disclaimer.
 
 query "$RESULTS_DIR/grounding.json" "sherlock" \
     "What is the airspeed velocity of an unladen swallow?" \
@@ -167,16 +168,29 @@ query "$RESULTS_DIR/grounding.json" "sherlock" \
 
 answer_g=$(jq -r '.answer' "$RESULTS_DIR/grounding.json")
 sources_g=$(jq '.sources | length' "$RESULTS_DIR/grounding.json")
+answer_g_len=${#answer_g}
 
 echo "  Off-topic question sources retrieved: $sources_g"
 echo "  Answer preview:"
 echo "$answer_g" | fold -s -w 80 | head -4 | sed 's/^/    /'
 echo ""
 
-if echo "$answer_g" | grep -qi "srcc-support\|verify with\|may not reflect"; then
-    pass "Grounding disclaimer present — model flagged ungrounded answer"
+# Correct behaviour: model refuses without answering.
+# Check 1 — model used a scope-refusal phrase
+if echo "$answer_g" | grep -qi "can only help\|only assist\|not.*my scope\|outside.*scope\|only answer.*hpc\|hpc.*question"; then
+    pass "Off-topic question cleanly refused (scope phrase detected)"
+# Check 2 — answer is very short (≤ 200 chars) and contains HPC/cluster keywords,
+#            meaning the model declined and stopped rather than answering
+elif [[ $answer_g_len -le 200 ]] && echo "$answer_g" | grep -qi "hpc\|cluster\|stanford\|srcc"; then
+    pass "Off-topic question cleanly refused (short HPC-scoped response, ${answer_g_len} chars)"
+# Check 3 — old-style: REFUSAL_DISCLAIMER was appended (still acceptable)
+elif echo "$answer_g" | grep -qi "srcc-support\|verify with\|may not reflect"; then
+    pass "Off-topic question flagged with disclaimer"
+# Fail — model actually answered the off-topic question
+elif echo "$answer_g" | grep -qi "miles per hour\|swallow\|airspeed\|velocity"; then
+    fail "Model answered the off-topic question instead of refusing"
 else
-    warn "No grounding disclaimer — check GROUNDING_CHECK_ENABLED in config.yaml"
+    warn "Unclear off-topic response — review manually"
 fi
 
 # Now test a cluster-specific but retrievable question — should NOT have disclaimer
