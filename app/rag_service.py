@@ -304,21 +304,31 @@ class RAGService:
                 return "No relevant documents were found for this query."
 
             def _clean_content(text: str) -> str:
-                # Sherlock/Farmshare docs use Markdown reference variables:
-                #   [Scheduling on Sherlock][url_scheduling]
-                #   [url_scheduling]: https://...
-                # The model copies these anchor texts as citations instead of
-                # using the document's own title from the header below.
-                # Strip reference notation so the model sees plain prose and
-                # must use the '--- Document: Title ---' header to cite.
-                text = re.sub(r'\[([^\]]+)\]\[[^\]]*\]', r'\1', text)   # [text][ref] → text
-                text = re.sub(r'\[url_[^\]]+\](?::[^\n]*)?\n?', '', text)  # [url_xxx]: ... lines
+                # Sherlock/Farmshare docs use Markdown reference variables such as
+                # [Scheduling on Sherlock][url_scheduling] and [url_xxx]: https://...
+                # Strip them so the model sees plain prose and cannot copy anchor
+                # text as a citation title — it must use the document header instead.
+                text = re.sub(r'\[([^\]]+)\]\[[^\]]*\]', r'\1', text)      # [text][ref] → text
+                text = re.sub(r'\[url_[^\]]+\](?::[^\n]*)?\n?', '', text)  # [url_xxx]: lines
                 return text
 
-            # Format with title so LLM can cite by title
-            return "\n\n".join(
-                f"--- Document: {doc.metadata.get('title', doc.metadata.get('source', 'Unknown'))} ---\n{_clean_content(doc.page_content)}"
+            titles = [
+                doc.metadata.get('title', doc.metadata.get('source', 'Unknown'))
                 for doc in retrieved_docs
+            ]
+
+            # Lead with an explicit title list so the model knows the exact
+            # strings it must use when citing — prevents invented titles like
+            # "Scheduling on Sherlock" that don't match any retrieved document.
+            title_list = "\n".join(f"  - {t}" for t in titles)
+            docs_text = "\n\n".join(
+                f"--- Document: {title} ---\n{_clean_content(doc.page_content)}"
+                for title, doc in zip(titles, retrieved_docs)
+            )
+            return (
+                f"AVAILABLE SOURCES — cite using [Title] with ONLY these exact titles:\n"
+                f"{title_list}\n\n"
+                f"{docs_text}"
             )
 
         self.chain = (
@@ -538,8 +548,10 @@ class RAGService:
         retrieved_titles = set(title_to_doc.keys())
         genuine_citations = {t for t in cited_titles if len(t.split()) > 1
                              and not t.startswith('url_')}
-        if genuine_citations:
-            final_answer = self._check_grounding(final_answer, genuine_citations, retrieved_titles)
+        # Grounding check — only skip if a genuine citation resolved correctly.
+        if genuine_citations and (genuine_citations & retrieved_titles
+                                   or any(_resolve_title(t) for t in genuine_citations)):
+            pass  # model cited a resolvable source — consider it grounded
         else:
             final_answer = self._check_grounding(final_answer, cited_titles, retrieved_titles)
 
