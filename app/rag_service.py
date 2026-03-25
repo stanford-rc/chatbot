@@ -114,18 +114,33 @@ class RAGService:
         os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
         logger.info("Tensor parallel mode: exposing both GPUs (CUDA_VISIBLE_DEVICES=0,1)")
 
+        # vLLM's internal RPC timeout between EngineCore and GPU WorkerProcs.
+        # Default is ~10 s, which is not enough for the first forward pass on a
+        # 32B model (NCCL initialisation, Marlin kernel warm-up, etc.).
+        # setdefault so an explicit env override from the launch environment wins.
+        os.environ.setdefault('VLLM_RPC_TIMEOUT', '300000')   # 5 min (ms)
+        os.environ.setdefault('VLLM_WORKER_MULTIPROC_TIMEOUT', '600')  # 10 min (s)
+
         self.model = LLM(
             model=self.settings.MODEL_PATH,
             quantization="awq_marlin",
             dtype="half",
             # Tensor parallel across 2× NVIDIA L4 (22.5 GiB each).
             # Model shard per GPU: ~9 GiB.  Free per GPU: ~13.5 GiB.
-            # KV cache budget: 0.95 × 22.5 × 2 − 18.14 ≈ 24.6 GiB total.
-            # At max_model_len=8192 (~2 GiB KV/request): ~12 concurrent requests.
+            # KV cache budget: 0.90 × 22.5 × 2 − 18.14 ≈ 22.3 GiB total.
+            # At max_model_len=4096 (~1 GiB KV/request): ~20+ concurrent requests.
             # vLLM continuous batching handles all concurrency — no nginx needed.
             tensor_parallel_size=2,
             gpu_memory_utilization=0.90,
-            max_model_len=8192,
+            max_model_len=4096,
+            # enforce_eager=True disables CUDA graph capture.
+            # Without it, the first real inference request triggers graph capture
+            # on both GPU shards simultaneously (can take 2-5 min for 32B).
+            # The EngineCore→WorkerProc RPC times out while waiting for the workers
+            # to finish capture, even with VLLM_RPC_TIMEOUT raised.
+            # For a chatbot workload (long prompts, few concurrent users) the
+            # throughput difference vs. graphs is negligible.
+            enforce_eager=True,
             disable_log_stats=True,
         )
         self.tokenizer = self.model.get_tokenizer()
