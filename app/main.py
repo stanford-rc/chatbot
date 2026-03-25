@@ -102,6 +102,23 @@ async def query_kb(request: QueryRequest):
         logger.error(f"Error handling query: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@app.post("/cache/clear", summary="Clear the semantic response cache")
+async def clear_cache():
+    """
+    Flush the semantic response cache.  Useful before running the test suite
+    to ensure test queries get fresh model responses rather than cached ones.
+    """
+    if rag_service.semantic_cache is None:
+        return {"cleared": False, "reason": "semantic cache not enabled"}
+    try:
+        rag_service.semantic_cache.clear()
+        logger.info("Semantic cache cleared via API")
+        return {"cleared": True}
+    except Exception as e:
+        logger.error(f"Failed to clear semantic cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Cache clear failed: {e}")
+
+
 @app.get("/stats", summary="Worker statistics")
 async def worker_stats():
     """Return worker-specific statistics"""
