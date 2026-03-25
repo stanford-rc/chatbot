@@ -122,27 +122,16 @@ class RAGService:
             model=self.settings.MODEL_PATH,
             quantization="awq_marlin",   # faster than awq; avoids awq_dequantize kernel path
             dtype="half",
-            gpu_memory_utilization=0.92,
-            max_model_len=8192,
-            num_gpu_blocks_override=2048, # ⚠ bypasses vLLM's KV-cache memory calculation.
-                                          # With NVML failing in Apptainer, the eager-mode
-                                          # profiling pass reports ~25 GB of phantom overhead
-                                          # (model=18 GiB, GPU=48 GiB, yet reports 0.48 GiB
-                                          # available). Physical memory is fine: 18 GiB model
-                                          # + 2048×4.2 MiB KV cache ≈ 26.6 GiB on a 48 GiB GPU.
-                                          # 2048 blocks × 16 tokens = 32K token slots total
-                                          # (~4 concurrent 8192-token requests).
-                                          # Remove once NVML is fixed and profiling is accurate.
-            enforce_eager=True,          # ⚠ KNOWN LIMITATION: CUDA graph capture disabled.
-                                         # PyTorch's CUDACachingAllocator asserts nvmlInit_v2_()
-                                         # succeeds at CUDACachingAllocator.cpp:1124 during graph
-                                         # warmup. In Apptainer containers, NVML (libnvidia-ml.so)
-                                         # is accessible for CUDA compute but the management API
-                                         # fails to initialize, triggering this hard C++ assert.
-                                         # Restoring CUDA graphs requires fixing NVML in the
-                                         # container (verify libnvidia-ml.so version matches host
-                                         # driver, or file a bug with the PyTorch CUDA team).
-                                         # Perf impact: ~5-15% higher per-token latency vs graphs.
+            # GPU: 2× NVIDIA L4, 22.5 GiB each.  Model (Qwen2.5-32B AWQ) = ~18.1 GiB.
+            # Budget at 0.95 utilisation: 0.95 × 22.5 = 21.4 GiB.
+            # Available for KV cache after model load: ~3.3 GiB
+            #   (sitecustomize.py Shim 2 flushes PyTorch's caching allocator before
+            #    vLLM reads free memory, preventing ~2 GiB of phantom AWQ→Marlin
+            #    conversion overhead from being counted as "used").
+            # KV cache per request at max_model_len=4096: ~1.0 GiB → ~3 concurrent requests.
+            gpu_memory_utilization=0.95,
+            max_model_len=4096,          # hardware-appropriate for L4; 8192 would leave room
+                                         # for only 1 concurrent request on 22.5 GiB VRAM.
             disable_log_stats=True,
         )
         self.tokenizer = self.model.get_tokenizer()
