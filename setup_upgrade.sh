@@ -25,7 +25,18 @@ MODEL_LOCAL_PATH="$MODEL_DIR/Qwen2.5-32B-Instruct-AWQ"
 
 SIF_NAME="chatbot.sif"
 SIF_DEF="chatbot.def"
-ENDPOINT="http://localhost:8000/query/"
+# Worker1 direct port (8001). The load balancer (api_port 8000) may not be
+# running in single-worker / dev mode.
+WORKER1_PORT=$(python3 -c "
+import yaml
+try:
+    c = yaml.safe_load(open('config.yaml'))
+    workers = c.get('workers', [])
+    print(workers[0]['port'] if workers else 8001)
+except Exception:
+    print(8001)
+" 2>/dev/null || echo 8001)
+ENDPOINT="http://localhost:${WORKER1_PORT}/query/"
 
 # Colors
 GREEN='\033[0;32m'
@@ -146,8 +157,8 @@ tune_bm25() {
     if ! curl -sf "$ENDPOINT" -X POST -H "Content-Type: application/json" \
          -d '{"query":"test","cluster":"sherlock"}' > /dev/null 2>&1; then
         # Try health check instead (the query might fail but service could be up)
-        if ! curl -sf "http://localhost:8000/health" > /dev/null 2>&1; then
-            echo -e "${RED}ERROR: Chatbot service is not running on port 8000.${NC}"
+        if ! curl -sf "http://localhost:${WORKER1_PORT}/health" > /dev/null 2>&1; then
+            echo -e "${RED}ERROR: Chatbot service is not running on port ${WORKER1_PORT}.${NC}"
             echo "Start it first with: ./main.sh multi"
             exit 1
         fi
