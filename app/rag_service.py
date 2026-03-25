@@ -468,38 +468,68 @@ class RAGService:
         llm_answer = re.sub(r'\n```[\s]*$', '', llm_answer)
         llm_answer = llm_answer.strip()
 
-        # Extract citations from LLM answer (format: [Title])
+        # ── Normalise citation syntax ────────────────────────────────────────
+        # Sherlock/Farmshare docs use Markdown reference-link variables such as
+        #   [url_scheduling], [url_storage], etc.
+        # The model sometimes inherits this style, writing:
+        #   "refer to [Scheduling on Sherlock][url_scheduling]"
+        # Step 1: collapse reference notation [text][ref_id] → [text]
+        llm_answer = re.sub(r'\[([^\]]+)\]\[[^\]]*\]', r'[\1]', llm_answer)
+        # Step 2: strip bare url-variable references left over: [url_xxx]
+        llm_answer = re.sub(r'\[url_[^\]]+\]', '', llm_answer)
+
+        # Extract citations (format: [Title])
         cited_titles = set(re.findall(r'\[([^\]]+)\]', llm_answer))
         logger.info(f"LLM cited {len(cited_titles)} sources: {cited_titles}")
 
-        # Build title → URL mapping from retrieved docs
-        title_to_url = {}
-        title_to_doc = {}
+        # Build title → URL + doc mappings (case-insensitive key for matching)
+        title_to_url: dict = {}
+        title_to_doc: dict = {}
+        title_lower_map: dict = {}   # lowercase canonical title → original title
         for doc in retrieved_docs:
             title = doc.metadata.get('title', 'Unknown')
             url = doc.metadata.get('url', None)
             if url:
-                url = ''.join(url.split())  # Remove any embedded whitespace/newlines
+                url = ''.join(url.split())  # strip embedded whitespace/newlines
             title_to_url[title] = url
             title_to_doc[title] = doc
+            title_lower_map[title.lower()] = title
+
+        def _resolve_title(cited: str):
+            """Return the canonical doc title for a citation, or None."""
+            if cited in title_to_doc:
+                return cited
+            return title_lower_map.get(cited.lower())
 
         # Convert [Title] citations to inline markdown links [Title](URL)
         final_answer = llm_answer
-        for title in cited_titles:
-            if title in title_to_url and title_to_url[title]:
-                # Replace [Title] with [Title](url)
+        for cited in cited_titles:
+            canonical = _resolve_title(cited)
+            if canonical and title_to_url.get(canonical):
                 final_answer = final_answer.replace(
-                    f'[{title}]',
-                    f'[{title}]({title_to_url[title]})'
+                    f'[{cited}]',
+                    f'[{cited}]({title_to_url[canonical]})'
                 )
 
-        # Build sources list from only cited documents
-        cited_docs = [title_to_doc[title] for title in cited_titles if title in title_to_doc]
+        # Build sources list from matched cited documents
+        cited_docs = [
+            title_to_doc[_resolve_title(t)]
+            for t in cited_titles
+            if _resolve_title(t) is not None
+        ]
         source_objects = self._format_sources(cited_docs) if cited_docs else []
 
-        # Grounding safety net: flag ungrounded cluster-specific answers
+        # Grounding safety net: flag ungrounded cluster-specific answers.
+        # Skip if the model made genuine multi-word citation attempts — those
+        # indicate it's trying to ground its answer even if the title didn't
+        # match exactly (avoids false-positive disclaimers on cited answers).
         retrieved_titles = set(title_to_doc.keys())
-        final_answer = self._check_grounding(final_answer, cited_titles, retrieved_titles)
+        genuine_citations = {t for t in cited_titles if len(t.split()) > 1
+                             and not t.startswith('url_')}
+        if genuine_citations:
+            final_answer = self._check_grounding(final_answer, genuine_citations, retrieved_titles)
+        else:
+            final_answer = self._check_grounding(final_answer, cited_titles, retrieved_titles)
 
         # Append sources as a markdown list
         if source_objects:
