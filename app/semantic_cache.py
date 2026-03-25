@@ -38,7 +38,7 @@ class SemanticResponseCache:
             model_name: Sentence transformer model name
             similarity_threshold: Cosine similarity threshold (0-1)
         """
-        self.db_path = Path(db_path)
+        self.db_path = Path(db_path).resolve()  # absolute so CWD changes can't misdirect connections
         self.similarity_threshold = similarity_threshold
         
         # Load embedding model (80MB, runs on CPU)
@@ -87,6 +87,23 @@ class SemanticResponseCache:
         """Calculate cosine similarity between two embeddings."""
         return float(np.dot(emb1, emb2))
     
+    def _ensure_table(self, conn: sqlite3.Connection) -> None:
+        """Create the cache table if it doesn't exist (fail-safe for missing schema)."""
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS response_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_text TEXT NOT NULL,
+                cluster TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                response_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cluster ON response_cache(cluster)
+        """)
+        conn.commit()
+
     def get(self, query: str, cluster: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve cached response for similar query.
@@ -99,10 +116,11 @@ class SemanticResponseCache:
             Cached response dict or None if no match
         """
         query_embedding = self._get_embedding(query)
-        
+
         conn = sqlite3.connect(self.db_path)
+        self._ensure_table(conn)
         cursor = conn.cursor()
-        
+
         # Get all cached queries for this cluster
         cursor.execute(
             "SELECT id, query_text, embedding, response_json FROM response_cache WHERE cluster = ?",
@@ -154,10 +172,11 @@ class SemanticResponseCache:
             response: Response dict to cache
         """
         query_embedding = self._get_embedding(query)
-        
+
         conn = sqlite3.connect(self.db_path)
+        self._ensure_table(conn)
         cursor = conn.cursor()
-        
+
         cursor.execute(
             """
             INSERT INTO response_cache (query_text, cluster, embedding, response_json)
