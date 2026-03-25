@@ -138,30 +138,31 @@ class RAGService:
 
         self.model = LLM(
             model=self.settings.MODEL_PATH,
-            # Use AWQ kernels directly.  awq_marlin converts weights to Marlin
-            # format at startup via synchronous CUDA kernels; for 32B with TP=2
-            # this can take 5-15 minutes and blocks workers from reading the
-            # EngineCore's shm broadcast channel, causing repeated
-            # "No available shared memory broadcast block" warnings that look
-            # like a hang but are actually just the conversion in progress.
-            # Switching to plain awq skips conversion entirely; throughput
-            # difference is negligible for a chatbot (long prompts, low concurrency).
+            # Use AWQ kernels directly (no online AWQ→Marlin conversion).
             quantization="awq",
             dtype="half",
             # Tensor parallel across 2× NVIDIA L4 (22.5 GiB each).
-            # Model shard per GPU: ~9 GiB.  Free per GPU: ~13.5 GiB.
-            # KV cache budget: 0.90 × 22.5 × 2 − 18.14 ≈ 22.3 GiB total.
-            # At max_model_len=4096: Qwen 32B KV ≈ 256 KB/token × 4096 = 1 GiB/request
-            # → ~20+ concurrent requests at this context length.
+            # Model shard per GPU: ~9 GiB.  KV budget: ~9.6 GiB/GPU (19x concurrency).
             tensor_parallel_size=2,
             gpu_memory_utilization=0.90,
             max_model_len=4096,
-            # enforce_eager=True disables CUDA graph capture.
-            # Without it, the first real inference request triggers graph capture
-            # on both GPU shards simultaneously (2-5 min for 32B), and the
-            # EngineCore→WorkerProc RPC times out waiting for the workers.
-            # Throughput difference vs. graphs is negligible for this workload.
+            # ── Critical Apptainer workarounds ──────────────────────────────
+            # 1. enforce_eager: disable CUDA graph capture to prevent
+            #    EngineCore→WorkerProc RPC timeout during graph compilation.
             enforce_eager=True,
+            # 2. disable_custom_all_reduce: vLLM's fast custom all-reduce has
+            #    two implementations:
+            #      a. SymmMemCommunicator (symmetric memory) — NOT supported on
+            #         sm_89 (L4); vLLM logs "Device capability 8.9 not supported".
+            #      b. CustomAllreduce (legacy) — uses CUDA IPC memory handles to
+            #         share GPU buffers across processes.  CUDA IPC is blocked by
+            #         Apptainer's container security model, causing the post-init
+            #         warmup forward pass to hang indefinitely (visible as repeated
+            #         "No available shared memory broadcast block" log lines).
+            #    Setting True forces vLLM to use standard NCCL all-reduce instead,
+            #    which uses socket transport (NCCL_P2P_DISABLE + NCCL_SHM_DISABLE
+            #    set above) and works correctly inside Apptainer.
+            disable_custom_all_reduce=True,
             disable_log_stats=True,
         )
         self.tokenizer = self.model.get_tokenizer()
