@@ -342,11 +342,20 @@ class RAGService:
             Generated text response
         """
         try:
-            # Extract prompt content from LangChain message object
+            # Build a properly-roled message list for vLLM.chat().
+            # LangChain message types: SystemMessage → "system",
+            # HumanMessage → "user", AIMessage → "assistant".
+            # Passing a single merged user-message caused Qwen to ignore the
+            # system-level citation instructions; proper roles fix that.
+            _ROLE_MAP = {"system": "system", "human": "user", "ai": "assistant"}
             if isinstance(inputs, dict) and 'messages' in inputs:
-                query = inputs['messages'][0].content
+                messages = [
+                    {"role": _ROLE_MAP.get(getattr(m, "type", "human"), "user"),
+                     "content": m.content}
+                    for m in inputs['messages']
+                ]
             else:
-                query = str(inputs)
+                messages = [{"role": "user", "content": str(inputs)}]
 
             sampling_params = SamplingParams(
                 max_tokens=self.settings.MAX_NEW_TOKENS,
@@ -356,7 +365,7 @@ class RAGService:
             # vLLM's chat() applies the model's own chat template automatically
             logger.info("Starting vLLM generation...")
             outputs = self.model.chat(
-                messages=[{"role": "user", "content": query}],
+                messages=messages,
                 sampling_params=sampling_params,
                 use_tqdm=False,
             )
@@ -413,7 +422,11 @@ class RAGService:
         r'\b(?:partition|sbatch|srun|squeue|scancel|salloc|sinfo|scontrol'
         r'|module\s+load|module\s+avail|scratch|oak|sherlock|farmshare|elm'
         r'|slurm|quota|storage|node|gpu\s+partition|memory\s+limit'
-        r'|job\s+submit|batch\s+script|queue)\b',
+        r'|job\s+submit|batch\s+script|queue'
+        # Also catch refusal messages that mention SRCC/HPC context — these fire
+        # when the model correctly declines off-topic questions but the grounding
+        # disclaimer should still be appended so users know where to ask instead.
+        r'|srcc|stanford\s+research|hpc\s+cluster|computing\s+center)\b',
         re.IGNORECASE,
     )
 

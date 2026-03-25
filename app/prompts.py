@@ -27,10 +27,12 @@ def get_prompt_template(model_type: str) -> ChatPromptTemplate:
             "<s>[INST] " + _SYSTEM_INSTRUCTIONS + "\nCONTEXT:\n{context}\n\nUSER QUERY:\n{query} [/INST]"
         )
     else:
-        # Qwen, Gemma, and other models: plain template.
-        # For Qwen/Llama-family, rag_service._generate_response wraps this via
-        # tokenizer.apply_chat_template, so the system instructions here become
-        # the body of the user turn and are still followed correctly.
-        return ChatPromptTemplate.from_template(
-            _SYSTEM_INSTRUCTIONS + "\nCONTEXT:\n{context}\n\nUSER QUERY:\n{query}"
-        )
+        # Qwen and other chat models: use proper system + user roles.
+        # Packing everything into one user message causes Qwen to treat the
+        # system instructions as part of the question and ignore them (including
+        # the [Title] citation directive).  Splitting into roles makes
+        # instruction-following much more reliable.
+        return ChatPromptTemplate.from_messages([
+            ("system", _SYSTEM_INSTRUCTIONS),
+            ("human", "CONTEXT:\n{context}\n\nUSER QUERY:\n{query}"),
+        ])

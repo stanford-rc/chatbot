@@ -69,7 +69,10 @@ retrieval:
   # Minimum BM25 score for a document to be considered relevant.
   # Documents below this threshold are discarded before prompt injection.
   # Tune empirically against real queries; set to 0.0 to disable filtering.
-  MIN_BM25_SCORE: 2.0
+  # Lowered from 2.0: a threshold of 2.0 can filter out all documents for
+  # short or broad queries where term frequencies are low across the corpus.
+  # Set to 0.0 to disable filtering entirely; tune upward if noisy docs appear.
+  MIN_BM25_SCORE: 1.0
 
   # Hybrid retrieval: combine BM25 (keyword) with FAISS (semantic) search
   HYBRID_ENABLED: true
