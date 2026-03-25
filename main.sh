@@ -52,6 +52,22 @@ echo "API port: $PORT, host: $HOST, log dir: $LOG_DIR"
 echo "Stopping any existing chatapi instance..."
 apptainer instance stop chatapi 2>/dev/null || true
 
+# Kill any stray vLLM/uvicorn processes that might hold GPU memory or shm
+pkill -9 -f "EngineCore" 2>/dev/null || true
+pkill -9 -f "vllm"       2>/dev/null || true
+pkill -9 -f "uvicorn app.main" 2>/dev/null || true
+sleep 2
+
+# Clean up orphaned POSIX shared memory left by SIGKILL'd vLLM processes.
+# Python's multiprocessing.shared_memory writes files to /dev/shm/ (psm_*).
+# If vLLM is killed with -9 those files are never deleted; the next startup
+# finds all broadcast blocks "in use" and hangs for minutes before erroring.
+if find /dev/shm -maxdepth 1 -user "$USER" -name "psm_*" 2>/dev/null | grep -q .; then
+    echo "Cleaning up orphaned shared memory blocks from /dev/shm ..."
+    find /dev/shm -maxdepth 1 -user "$USER" -delete 2>/dev/null || true
+    echo "  ✓ Done"
+fi
+
 # Ensure log directory and LangChain DB file exist on the host before binding
 mkdir -p "$LOG_DIR"
 if [ ! -f "$DATABASE_FILE" ]; then
