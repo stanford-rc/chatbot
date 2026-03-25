@@ -58,6 +58,20 @@ echo "  Endpoint : $ENDPOINT"
 echo "  Results  : $RESULTS_DIR"
 echo ""
 
+# ── Pre-flight: clear semantic cache ───────────────────────────────────────
+# Always clear before running so test 1 (basic RAG) gets a fresh model
+# response, not a cached answer from a previous run with different settings.
+# Skip with --no-cache-clear if you specifically want to test cache behaviour.
+if [[ -z "${NO_CACHE_CLEAR:-}" ]]; then
+    clear_http=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$ENDPOINT/cache/clear")
+    if [[ "$clear_http" == "200" ]]; then
+        echo "  ✓ Semantic cache cleared before run"
+    else
+        echo "  ⚠  Cache clear returned $clear_http — continuing anyway"
+    fi
+    echo ""
+fi
+
 
 # ── Test 0: Connectivity ───────────────────────────────────────────────────
 section "TEST 0 — Connectivity & Health"
@@ -207,12 +221,11 @@ fi
 # ── Test 5: Semantic Cache ─────────────────────────────────────────────────
 section "TEST 5 — Semantic Cache Performance"
 
+# Cache was already cleared at the start of this script.
+# Clear again here so Q1 is a genuine fresh miss (tests 1-4 may have warmed it).
 if [[ -z "${NO_CACHE_CLEAR:-}" ]]; then
-    read -r -p "  Clear semantic cache before this test? [y/N] " resp
-    if [[ "$resp" =~ ^[Yy]$ ]]; then
-        rm -f .response_cache.db
-        echo "  Cache cleared."
-    fi
+    c=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$ENDPOINT/cache/clear")
+    [[ "$c" == "200" ]] && echo "  Cache cleared." || echo "  ⚠  Cache clear returned $c"
 fi
 
 echo "  Q1: fresh question..."
