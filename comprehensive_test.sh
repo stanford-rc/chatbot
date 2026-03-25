@@ -8,17 +8,14 @@
 set -euo pipefail
 
 # ── Config ─────────────────────────────────────────────────────────────────
-# Default: worker1 direct port (8001). The load balancer sits on api_port (8000)
-# but may not be running in single-worker / dev mode.
 PORT=$(python3 -c "
 import yaml
 try:
     c = yaml.safe_load(open('config.yaml'))
-    workers = c.get('workers', [])
-    print(workers[0]['port'] if workers else c.get('server',{}).get('api_port', 8001))
+    print(c.get('server',{}).get('api_port', 8000))
 except Exception:
-    print(8001)
-" 2>/dev/null || echo 8001)
+    print(8000)
+" 2>/dev/null || echo 8000)
 HOST="localhost"
 
 # Parse optional overrides

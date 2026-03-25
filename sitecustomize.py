@@ -18,7 +18,7 @@ Shim 2 — GPUWorker.determine_available_memory patch (import hook)
   tensors (~16–25 GiB) that PyTorch's caching allocator retains after they
   are freed. torch.cuda.mem_get_info() sees the cache as "used" at the CUDA
   driver level, so vLLM calculates only ~0.48 GiB available for KV cache on
-  a 48 GiB GPU with an 18 GiB model — clearly wrong.
+  a 22.5 GiB L4 with an 18 GiB model — clearly wrong.
   Fix: intercept the import of vllm.v1.worker.gpu_worker and wrap
   GPUWorker.determine_available_memory to call torch.cuda.empty_cache()
   before measuring free memory, releasing the allocator cache to the driver.
@@ -222,7 +222,7 @@ class _GpuWorkerPatcher(_abc.MetaPathFinder):
             # activation buffers, etc.) is returned to the CUDA driver before
             # mem_get_info() reads the free-memory counter.  Without this,
             # ~25 GiB of cached-but-freed tensors show as "used" and vLLM
-            # calculates near-zero KV cache headroom on a 48 GiB GPU.
+            # calculates near-zero KV cache headroom on a 22.5 GiB L4.
             torch.cuda.empty_cache()
             return orig(self)
 

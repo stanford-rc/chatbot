@@ -1,6 +1,26 @@
 #!/bin/bash
-# Start multi-GPU chatbot with load balancer and queueing
-# Handles unlimited concurrent requests across 2 GPU workers
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  DEPRECATED — DO NOT USE WITH THE CURRENT ARCHITECTURE                  ║
+# ║                                                                          ║
+# ║  This script starts two independent uvicorn workers (one per GPU) and   ║
+# ║  a nginx load balancer in front of them.  It is INCOMPATIBLE with the   ║
+# ║  current rag_service._load_model() which sets tensor_parallel_size=2:   ║
+# ║                                                                          ║
+# ║  Worker 1 (TP=2) claims both L4 GPUs via NCCL.                         ║
+# ║  Worker 2 (TP=2) finds both GPUs occupied → OOM →                      ║
+# ║    "Engine core initialization failed / WorkerProc initialization failed"║
+# ║                                                                          ║
+# ║  Use ./main.sh instead.  vLLM's continuous batching handles concurrent  ║
+# ║  requests natively.  No load balancer is needed.                        ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+echo ""
+echo "ERROR: start_multi_gpu.sh is incompatible with tensor_parallel_size=2."
+echo "       Run  ./main.sh  instead."
+echo ""
+exit 1
+
+# ── original script preserved below for reference ─────────────────────────
 
 cd "$(dirname "$0")"
 
