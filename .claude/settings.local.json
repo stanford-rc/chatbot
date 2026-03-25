@@ -28,7 +28,10 @@
       "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/__init__.py)",
       "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/cuda.py)",
       "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/envs.py)",
-      "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/interface.py)"
+      "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/interface.py)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(Sherlock\"\\) instead of the frontmatter title.:*)"
     ]
   }
 }
