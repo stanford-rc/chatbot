@@ -116,7 +116,7 @@ fi
 
 echo ""
 echo "  Answer preview:"
-echo "$answer" | fold -s -w 80 | head -5 | sed 's/^/    /'
+echo "$answer" | head -c 600 | fold -s -w 80 | sed 's/^/    /'
 echo "    ..."
 
 
@@ -172,7 +172,7 @@ answer_g_len=${#answer_g}
 
 echo "  Off-topic question sources retrieved: $sources_g"
 echo "  Answer preview:"
-echo "$answer_g" | fold -s -w 80 | head -4 | sed 's/^/    /'
+echo "$answer_g" | head -c 400 | fold -s -w 80 | sed 's/^/    /'
 echo ""
 
 # Correct behaviour: model refuses without answering.
