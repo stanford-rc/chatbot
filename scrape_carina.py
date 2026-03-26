@@ -18,7 +18,7 @@ Usage:
 Environment variables (optional):
     CARINA_OUTPUT_DIR  - output directory   (default: docs/carina)
     CARINA_MAX_PAGES   - page cap           (default: 200)
-    LOG_FILE           - log file path      (default: magicFile.log)
+    LOG_FILE           - log file path      (default: docs/magicFile.log)
 """
 
 import os
@@ -42,7 +42,7 @@ OUTPUT_DIR      = Path(os.getenv("CARINA_OUTPUT_DIR", "docs/carina"))
 MAX_PAGES       = int(os.getenv("CARINA_MAX_PAGES", 200))
 REQUEST_DELAY   = 0.5
 REQUEST_TIMEOUT = 15
-LOG_FILE        = os.getenv("LOG_FILE", "logs/scrapers.log")
+LOG_FILE        = os.getenv("LOG_FILE", "logs/magicFile.log")
 
 # Elements to strip before content extraction.
 # The site wraps chrome in <header>, <nav>, and <footer> — easy to isolate.
