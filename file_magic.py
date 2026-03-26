@@ -73,6 +73,10 @@ SOURCES = [
             },
         ]
     },
+    {
+        "repo_url": "https://github.com/stanford-rc/nero-docs",
+        "repo_name": "nero"
+    },
     # {
     #     "repo_url": "https://github.com/another/example-repo.git",
     #     "repo_name": "example",

@@ -10,7 +10,6 @@ model:
   device: "cuda"
   use_quantization: false
   local_files_only: true
-  dtype: "bfloat16"
 
 # Generation Parameters
 generation:
@@ -39,6 +38,9 @@ api:
     farmshare: "farmshare"
     oak: "oak"
     elm: "elm"
+    src: "src"
+    carina: "carina"
+    nero: "nero"
 
 # Caching Configuration
 caching:
@@ -93,6 +95,9 @@ clusters:
   farmshare: "docs/farmshare/"
   oak: "docs/oak/"
   elm: "docs/elm/"
+  carina: "docs/carina"
+  src: "docs/src"
+  nero: "docs/nero"
 
 # Server Settings
 server:
