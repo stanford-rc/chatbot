@@ -76,7 +76,7 @@ retrieval:
 
   # Hybrid retrieval: combine BM25 (keyword) with FAISS (semantic) search
   HYBRID_ENABLED: true
-  VECTOR_MODEL: "all-MiniLM-L6-v2"
+  VECTOR_MODEL: "/home/users/bcritt/apichatbot/models/all-MiniLM-L6-v2"
   RRF_K: 60               # Reciprocal rank fusion constant
 
 # Grounding check
