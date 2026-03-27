@@ -40,7 +40,7 @@ OUTPUT_DIR      = Path(os.getenv("SRCC_OUTPUT_DIR", "docs/srcc"))
 MAX_PAGES       = int(os.getenv("SRCC_MAX_PAGES", 500))
 REQUEST_DELAY   = 0.5
 REQUEST_TIMEOUT = 15
-LOG_FILE        = os.getenv("LOG_FILE", "logs/magicFile.log")
+LOG_FILE        = os.getenv("LOG_FILE", "logs/scrapers.log")
 
 # ---------------------------------------------------------------------------
 # SDP bundle definitions
