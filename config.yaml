@@ -38,6 +38,9 @@ api:
     farmshare: "farmshare"
     oak: "oak"
     elm: "elm"
+    src: "src"
+    carina: "carina"
+    nero: "nero"
 
 # Caching Configuration
 caching:
@@ -97,6 +100,9 @@ clusters:
   farmshare: "docs/farmshare/"
   oak: "docs/oak/"
   elm: "docs/elm/"
+  carina: "docs/carina"
+  src: "docs/src"
+  nero: "docs/nero"
 
 # Shared documentation merged into every cluster's retriever at startup.
 # Content here (e.g. SRCC web pages) will be searchable for all cluster queries.

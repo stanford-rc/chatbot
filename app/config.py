@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Model settings
     MODEL_PATH: str = Field(default=config['model']['path'], env="MODEL_PATH")
     MODEL_TYPE: str = config['model']['type']
+    MODEL_DTYPE: str = config['model'].get('dtype', 'auto')
     MODEL_DEVICE: str = os.environ.get('WORKER_GPU', config['model']['device'])
     USE_QUANTIZATION: bool = config['model']['use_quantization']
     LOCAL_FILES_ONLY: bool = config['model']['local_files_only']

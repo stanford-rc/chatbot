@@ -40,7 +40,7 @@ OUTPUT_DIR      = Path(os.getenv("SRCC_OUTPUT_DIR", "docs/srcc"))
 MAX_PAGES       = int(os.getenv("SRCC_MAX_PAGES", 500))
 REQUEST_DELAY   = 0.5
 REQUEST_TIMEOUT = 15
-LOG_FILE        = os.getenv("LOG_FILE", "magicFile.log")
+LOG_FILE        = os.getenv("LOG_FILE", "logs/scrapers.log")
 
 # ---------------------------------------------------------------------------
 # SDP bundle definitions
@@ -415,6 +415,8 @@ def extract_title(soup: BeautifulSoup, url: str) -> str:
 
 def is_crawlable(url: str) -> bool:
     parsed = urlparse(url)
+    if parsed.scheme in ("mailto", "tel", "javascript"):
+        return False
     if parsed.netloc and parsed.netloc != urlparse(BASE_URL).netloc:
         return False
     if re.search(r"\.(pdf|zip|docx?|xlsx?|pptx?|png|jpe?g|gif|svg|css|js)$",

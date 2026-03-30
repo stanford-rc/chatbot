@@ -26,3 +26,9 @@ apptainer exec \
     --pwd "$PWD" \
     $SIF_NAME \
     python3 scrape_srcc.py
+
+apptainer exec \
+    --bind "$PWD:$PWD" \
+    --pwd "$PWD" \
+    $SIF_NAME \
+    python3 scrape_static_docs.py

@@ -143,7 +143,7 @@ class RAGService:
             model=self.settings.MODEL_PATH,
             # Use AWQ kernels directly (no online AWQ→Marlin conversion).
             quantization="awq",
-            dtype="half",
+            dtype=self.settings.MODEL_DTYPE,
             # Tensor parallel across 2× NVIDIA L4 (22.5 GiB each).
             # Model shard per GPU: ~9 GiB.  KV budget: ~9.6 GiB/GPU (19x concurrency).
             tensor_parallel_size=2,
