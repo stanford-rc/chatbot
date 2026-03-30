@@ -437,6 +437,14 @@ class RAGService:
         
         return sources
 
+    # Short conversational/identity responses that should never trigger grounding
+    _CONVERSATIONAL_PATTERNS = re.compile(
+        r'\b(my name is|i\'m ada|i am ada|you\'re welcome|you are welcome'
+        r'|happy to help|how can i (assist|help)|glad to help'
+        r'|let me know if you|is there anything else|feel free to ask)\b',
+        re.IGNORECASE,
+    )
+
     # Keywords that suggest the answer is about cluster-specific configuration
     _CLUSTER_SPECIFIC_PATTERNS = re.compile(
         r'\b(?:partition|sbatch|srun|squeue|scancel|salloc|sinfo|scontrol'
@@ -460,6 +468,10 @@ class RAGService:
 
         # If the model cited at least one retrieved doc, it's grounded
         if cited_titles & retrieved_titles:
+            return answer
+
+        # Skip grounding check for short conversational/identity responses
+        if self._CONVERSATIONAL_PATTERNS.search(answer):
             return answer
 
         # Check whether the answer touches cluster-specific topics
