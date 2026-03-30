@@ -95,6 +95,9 @@ class RAGService:
                     db_path=self.settings.SEMANTIC_CACHE_DB,
                     similarity_threshold=self.settings.SEMANTIC_CACHE_THRESHOLD
                 )
+                if self.settings.SEMANTIC_CACHE_CLEAR_ON_STARTUP:
+                    self.semantic_cache.clear()
+                    logger.info("Semantic cache cleared on startup (SEMANTIC_CACHE_CLEAR_ON_STARTUP=true)")
                 logger.info(f"✓ Semantic cache initialized (threshold: {self.settings.SEMANTIC_CACHE_THRESHOLD})")
             except Exception as e:
                 logger.error(f"Failed to initialize semantic cache: {e}")

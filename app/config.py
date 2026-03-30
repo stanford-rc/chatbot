@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     SEMANTIC_CACHE_ENABLED: bool = config.get('caching', {}).get('SEMANTIC_CACHE_ENABLED', True)
     SEMANTIC_CACHE_THRESHOLD: float = config.get('caching', {}).get('SEMANTIC_CACHE_THRESHOLD', 0.70)
     SEMANTIC_CACHE_DB: str = config.get('caching', {}).get('SEMANTIC_CACHE_DB', '.response_cache.db')
+    SEMANTIC_CACHE_CLEAR_ON_STARTUP: bool = config.get('caching', {}).get('SEMANTIC_CACHE_CLEAR_ON_STARTUP', False)
     LANGCHAIN_CACHE_DB: str = config.get('caching', {}).get('LANGCHAIN_CACHE_DB', '.langchain.db')
     
     # Retrieval settings

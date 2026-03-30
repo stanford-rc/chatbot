@@ -43,6 +43,11 @@ api:
 caching:
   # Enable semantic response caching (requires sentence-transformers)
   SEMANTIC_CACHE_ENABLED: true
+
+  # Clear the semantic cache on every startup.
+  # Set to true during development/testing to avoid stale responses.
+  # Set to false in production to preserve cache across restarts.
+  SEMANTIC_CACHE_CLEAR_ON_STARTUP: false
   
   # Similarity threshold for semantic cache hits (0.0-1.0)
   # Lower = more permissive (e.g., 0.70 catches similar phrasings)
