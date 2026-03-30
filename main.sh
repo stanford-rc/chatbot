@@ -96,9 +96,10 @@ fi
 # ── Prepare bind mounts ───────────────────────────────────────────────────
 # $PWD → /workspace  (code, docs, DB files, sitecustomize.py)
 BIND_MOUNTS="--bind $PWD:/workspace"
-# Model directory (may be outside $PWD)
-if [ -d "$MODEL_PATH" ]; then
-    BIND_MOUNTS="$BIND_MOUNTS --bind $MODEL_PATH:$MODEL_PATH"
+# Bind the parent models directory so all models (LLM + embedding) are accessible
+MODEL_DIR="$(dirname "$MODEL_PATH")"
+if [ -d "$MODEL_DIR" ]; then
+    BIND_MOUNTS="$BIND_MOUNTS --bind $MODEL_DIR:$MODEL_DIR"
 fi
 
 echo "Bind mounts: $BIND_MOUNTS"

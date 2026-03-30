@@ -384,12 +384,15 @@ class RAGService:
                 temperature=0.0,  # greedy decoding
             )
 
-            # vLLM's chat() applies the model's own chat template automatically
+            # vLLM's chat() applies the model's own chat template automatically.
+            # enable_thinking=False disables Qwen3's chain-of-thought mode, which
+            # is on by default and would wrap every response in <think>...</think>.
             logger.info("Starting vLLM generation...")
             outputs = self.model.chat(
                 messages=messages,
                 sampling_params=sampling_params,
                 use_tqdm=False,
+                chat_template_kwargs={"enable_thinking": False},
             )
             response = outputs[0].outputs[0].text
             logger.info(f"Generation complete. Tokens generated: {len(outputs[0].outputs[0].token_ids)}")
@@ -482,6 +485,9 @@ class RAGService:
         Returns:
             Tuple of (formatted_answer, source_objects)
         """
+        # Safety net: strip Qwen3 thinking blocks if enable_thinking=False was
+        # ignored or if an older vLLM version doesn't support chat_template_kwargs.
+        llm_answer = re.sub(r'<think>.*?</think>\s*', '', llm_answer, flags=re.DOTALL).strip()
         # Some models output the literal two-character sequence \n instead of
         # a real newline. Normalize those to actual newlines regardless of model.
         llm_answer = llm_answer.replace('\\n', '\n')
