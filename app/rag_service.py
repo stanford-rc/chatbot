@@ -402,21 +402,6 @@ class RAGService:
             logger.error(f"Error during vLLM generation: {e}")
             raise ValueError(f"LLM generation error: {e}")
 
-    def _identify_cluster(self, user_query: str) -> str:
-        """
-        Identify cluster name from user query.
-        
-        Args:
-            user_query: User's question text
-            
-        Returns:
-            Cluster name or 'unknown'
-        """
-        user_query_lower = user_query.lower()
-        for cluster_name in self.settings.CLUSTERS.keys():
-            if re.search(r'\b' + re.escape(cluster_name) + r'\b', user_query_lower):
-                return cluster_name
-        return "unknown"
 
     def _format_sources(self, documents: List[Document]) -> List[Source]:
         """
@@ -587,13 +572,19 @@ class RAGService:
                 detail="Service Unavailable: RAG service is not initialized."
             )
 
-        # Determine cluster
-        cluster = request.cluster if request.cluster in self.retrievers else self._identify_cluster(request.query)
-        
-        if cluster == "unknown" or cluster not in self.retrievers:
+        # Determine cluster — set by the upstream routing layer in production.
+        # Falls back to the first loaded cluster for internal testing where no
+        # cluster is passed.  TODO(production): remove fallback once cluster is
+        # required in QueryRequest.
+        if request.cluster and request.cluster in self.retrievers:
+            cluster = request.cluster
+        else:
+            cluster = next(iter(self.retrievers))
+
+        if cluster not in self.retrievers:
             cluster_list_str = ", ".join(self.retrievers.keys())
             return QueryResponse(
-                answer=f"I couldn't determine which cluster you're asking about. Please specify one of: {cluster_list_str.capitalize()}.",
+                answer=f"Unknown cluster '{cluster}'. Available: {cluster_list_str}.",
                 cluster="unknown",
                 sources=[]
             )
