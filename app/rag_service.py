@@ -474,6 +474,11 @@ class RAGService:
         if self._CONVERSATIONAL_PATTERNS.search(answer):
             return answer
 
+        # Skip if answer already contains the support email — it's already a
+        # handled refusal or redirect and doesn't need a second disclaimer
+        if 'srcc-support@stanford.edu' in answer:
+            return answer
+
         # Check whether the answer touches cluster-specific topics
         if self._CLUSTER_SPECIFIC_PATTERNS.search(answer):
             logger.warning("Grounding check: answer discusses cluster topics but cites no retrieved docs")
