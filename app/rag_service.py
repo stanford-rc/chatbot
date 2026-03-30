@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
@@ -19,6 +20,7 @@ from vllm import LLM, SamplingParams
 from app.config import Settings
 from app.models import QueryRequest, QueryResponse, Source
 from app.prompts import get_prompt_template
+from app.stats import stats_tracker
 
 # Semantic caching - optional dependency
 try:
@@ -620,12 +622,19 @@ class RAGService:
             )
         
         # Check semantic cache first
+        t_start = time.monotonic()
         if self.semantic_cache:
             cached_response = self.semantic_cache.get(request.query, cluster)
             if cached_response:
                 logger.info("Cache hit - returning cached response")
+                stats_tracker.record_query(
+                    cluster=cluster,
+                    query=request.query,
+                    latency_s=time.monotonic() - t_start,
+                    cache_hit=True,
+                )
                 return QueryResponse(**cached_response)
-        
+
         logger.info(f"Processing query for cluster '{cluster}': '{request.query[:100]}...'")
 
         # Execute RAG chain
@@ -636,6 +645,13 @@ class RAGService:
             logger.info(f"Retrieved {len(retrieved_docs)} documents")
         except Exception as e:
             logger.error(f"Error during RAG chain invocation: {e}", exc_info=True)
+            stats_tracker.record_query(
+                cluster=cluster,
+                query=request.query,
+                latency_s=time.monotonic() - t_start,
+                cache_hit=False,
+                error=True,
+            )
             raise HTTPException(status_code=500, detail="Failed to generate a response from the model.")
 
         # Process answer and extract sources
@@ -646,7 +662,14 @@ class RAGService:
             cluster=cluster,
             sources=source_objects
         )
-        
+
+        stats_tracker.record_query(
+            cluster=cluster,
+            query=request.query,
+            latency_s=time.monotonic() - t_start,
+            cache_hit=False,
+        )
+
         # Cache the response for future similar queries
         if self.semantic_cache:
             try:
@@ -658,5 +681,5 @@ class RAGService:
                 logger.info("Response cached")
             except Exception as e:
                 logger.error(f"Failed to cache response: {e}")
-        
+
         return response

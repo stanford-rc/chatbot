@@ -6,10 +6,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException # pyright: ignore[reportMissingImports]
 from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissingImports]
+from fastapi.responses import HTMLResponse
 
 from app.config import settings
 from app.models import QueryRequest, QueryResponse
 from app.rag_service import RAGService
+from app.stats import stats_tracker
 
 # Setup logging
 os.makedirs(settings.LOG_DIR, exist_ok=True)
@@ -119,13 +121,21 @@ async def clear_cache():
         raise HTTPException(status_code=500, detail=f"Cache clear failed: {e}")
 
 
-@app.get("/stats", summary="Worker statistics")
-async def worker_stats():
-    """Return worker-specific statistics"""
-    return {
-        "status": "healthy",
-        "device": settings.MODEL_DEVICE,
-        "model_type": settings.MODEL_TYPE,
+@app.get("/dashboard", response_class=HTMLResponse, summary="Usage dashboard", include_in_schema=False)
+async def dashboard():
+    """Serve the live usage statistics dashboard."""
+    dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
+    with open(dashboard_path, "r") as f:
+        return HTMLResponse(content=f.read())
+
+
+@app.get("/stats", summary="Usage statistics")
+async def usage_stats():
+    """Return live usage statistics: query volume, cache performance, latency, top queries."""
+    data = stats_tracker.get_stats()
+    data["service"] = {
+        "model": settings.MODEL_PATH,
         "clusters": list(rag_service.retrievers.keys()),
-        "cache_enabled": settings.SEMANTIC_CACHE_ENABLED
+        "cache_enabled": settings.SEMANTIC_CACHE_ENABLED,
     }
+    return data
