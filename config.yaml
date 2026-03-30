@@ -93,6 +93,10 @@ clusters:
   oak: "docs/oak/"
   elm: "docs/elm/"
 
+# Shared documentation merged into every cluster's retriever at startup.
+# Content here (e.g. SRCC web pages) will be searchable for all cluster queries.
+shared_docs: "docs/srcc/"
+
 # Server Settings
 server:
   api_port: 8000

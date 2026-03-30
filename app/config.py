@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     
     # Cluster paths
     CLUSTERS: Dict[str, str] = config['clusters']
+
+    # Shared docs path — merged into every cluster's retriever at startup.
+    # Set to '' to disable.
+    SHARED_DOCS_PATH: str = config.get('shared_docs', '')
     
     # API settings
     CORS_ORIGINS: List[str] = config['api']['cors_origins']

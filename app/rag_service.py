@@ -181,6 +181,14 @@ class RAGService:
         elif self.settings.HYBRID_ENABLED and not FAISS_AVAILABLE:
             logger.warning("Hybrid retrieval enabled but faiss-cpu not installed. Falling back to BM25 only.")
 
+        # Load shared SRCC web docs once — merged into every cluster's retriever
+        shared_docs = []
+        if self.settings.SHARED_DOCS_PATH and os.path.isdir(self.settings.SHARED_DOCS_PATH):
+            shared_docs = self._ingest_markdown_files(self.settings.SHARED_DOCS_PATH)
+            logger.info(f"Loaded {len(shared_docs)} shared SRCC web documents from {self.settings.SHARED_DOCS_PATH}")
+        elif self.settings.SHARED_DOCS_PATH:
+            logger.warning(f"Shared docs path not found: {self.settings.SHARED_DOCS_PATH}. Skipping.")
+
         for cluster_name, path in self.settings.CLUSTERS.items():
             if not os.path.isdir(path):
                 logger.warning(f"Directory not found for cluster '{cluster_name}': {path}. Skipping.")
@@ -192,7 +200,9 @@ class RAGService:
                 logger.warning(f"No documents found for cluster '{cluster_name}'.")
                 continue
 
-            split_docs = text_splitter.split_documents(documents)
+            # Merge cluster-specific docs with shared SRCC web content
+            all_documents = documents + shared_docs
+            split_docs = text_splitter.split_documents(all_documents)
             self.retrievers[cluster_name] = BM25Retriever.from_documents(split_docs)
             logger.info(f"Created BM25 retriever for '{cluster_name}' ({len(split_docs)} chunks).")
 
