@@ -205,7 +205,10 @@ class RAGService:
                 logger.warning(f"No documents found for cluster '{cluster_name}'.")
                 continue
 
-            # Merge cluster-specific docs with shared SRCC web content
+            # Merge cluster-specific docs with shared SRCC web content.
+            # Relevancy among shared docs is handled naturally by BM25/FAISS
+            # scoring — a Sherlock query will rank Sherlock-relevant shared docs
+            # higher without any explicit filtering needed.
             all_documents = documents + shared_docs
             split_docs = text_splitter.split_documents(all_documents)
             self.retrievers[cluster_name] = BM25Retriever.from_documents(split_docs)
@@ -301,13 +304,19 @@ class RAGService:
         def retrieve_and_format_context(inputs: Dict) -> str:
             query, cluster = inputs['query'], inputs['cluster']
 
+            # Prepend the cluster name to the query so BM25/FAISS scoring
+            # naturally boosts cluster-relevant docs. Cross-cluster shared docs
+            # that don't mention the current cluster will score lower and tend
+            # to fall below the MIN_BM25_SCORE threshold without any hard filter.
+            augmented_query = f"{cluster} {query}"
+
             # BM25 retrieval with score filtering
-            bm25_results = self._retrieve_bm25_with_scores(query, cluster)
+            bm25_results = self._retrieve_bm25_with_scores(augmented_query, cluster)
             logger.info(f"BM25 returned {len(bm25_results)} docs above threshold")
 
             # Hybrid: merge BM25 + FAISS via RRF
             if self.settings.HYBRID_ENABLED and cluster in self.vector_stores:
-                faiss_results = self._retrieve_faiss(query, cluster)
+                faiss_results = self._retrieve_faiss(augmented_query, cluster)
                 logger.info(f"FAISS returned {len(faiss_results)} docs")
                 retrieved_docs = self._reciprocal_rank_fusion(bm25_results, faiss_results)
             else:
