@@ -3,19 +3,27 @@ stats.py — In-memory usage statistics tracker for Ada.
 
 Tracks query volume, cache performance, latency, errors, per-cluster
 usage, and popular queries. All counters reset on service restart.
+
+Popular queries are semantically collapsed: similar phrasings are grouped
+under a single canonical representative using the same sentence-transformers
+model as the semantic cache (runs on CPU, no GPU impact).
+
 Access via GET /stats.
 """
 
 import threading
-from collections import defaultdict, Counter
+from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 
 
 class StatsTracker:
-    def __init__(self):
+    def __init__(self, similarity_threshold: float = 0.70):
         self._lock = threading.Lock()
         self.start_time = datetime.now(timezone.utc)
+        self._similarity_threshold = similarity_threshold
 
         self.total_queries: int = 0
         self.cache_hits: int = 0
@@ -28,10 +36,50 @@ class StatsTracker:
         # Keep last 1000 latency samples for percentile calculation
         self._latencies: List[float] = []
 
-        # Track top queries (normalised, truncated to 200 chars)
-        self._query_counter: Counter = Counter()
+        # Semantic query clustering:
+        #   _canonical_queries: list of (canonical_text, embedding, count)
+        self._canonical_queries: List[Tuple[str, np.ndarray, int]] = []
+
+        # Embedding model — injected after startup via set_embedding_model()
+        self._embedding_model = None
+
+    def set_embedding_model(self, model) -> None:
+        """Inject the sentence-transformers model after it's loaded at startup."""
+        self._embedding_model = model
 
     # ── Recording ──────────────────────────────────────────────────────────
+
+    def _embed(self, text: str) -> Optional[np.ndarray]:
+        if self._embedding_model is None:
+            return None
+        try:
+            vec = self._embedding_model.encode(text, convert_to_numpy=True)
+            return vec / (np.linalg.norm(vec) + 1e-10)
+        except Exception:
+            return None
+
+    def _find_or_create_canonical(self, query: str) -> None:
+        """
+        Find the most similar existing canonical query and increment its count,
+        or create a new canonical entry if no match exceeds the threshold.
+        Embedding happens outside the lock to minimise contention.
+        """
+        normalised = query.strip().lower()[:200]
+        embedding = self._embed(normalised)
+
+        with self._lock:
+            if embedding is not None and self._canonical_queries:
+                # Cosine similarities against all canonicals
+                canonicals_emb = np.stack([e for _, e, _ in self._canonical_queries])
+                sims = canonicals_emb @ embedding
+                best_idx = int(np.argmax(sims))
+                if sims[best_idx] >= self._similarity_threshold:
+                    text, emb, count = self._canonical_queries[best_idx]
+                    self._canonical_queries[best_idx] = (text, emb, count + 1)
+                    return
+
+            # No match — new canonical
+            self._canonical_queries.append((normalised, embedding if embedding is not None else np.array([]), 1))
 
     def record_query(
         self,
@@ -62,9 +110,8 @@ class StatsTracker:
             hour_key = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:00 UTC")
             self.queries_by_hour[hour_key] += 1
 
-            # Popular queries
-            normalised = query.strip().lower()[:200]
-            self._query_counter[normalised] += 1
+        # Semantic collapsing runs outside the main lock (embedding is slow)
+        self._find_or_create_canonical(query)
 
     # ── Reporting ──────────────────────────────────────────────────────────
 
@@ -92,6 +139,13 @@ class StatsTracker:
                 sorted(self.queries_by_hour.items())[-24:]
             )
 
+            # Top 10 canonical queries by count
+            top_queries = sorted(
+                [(text, count) for text, _, count in self._canonical_queries],
+                key=lambda x: x[1],
+                reverse=True,
+            )[:10]
+
             return {
                 "uptime_seconds": round(uptime_s),
                 "since": self.start_time.strftime("%Y-%m-%d %H:%M UTC"),
@@ -111,13 +165,14 @@ class StatsTracker:
                 },
                 "queries_by_cluster": dict(self.queries_by_cluster),
                 "queries_by_hour": recent_hours,
-                "top_queries": self._query_counter.most_common(10),
+                "top_queries": top_queries,
             }
 
     def reset(self) -> None:
         """Reset all counters (e.g. for testing)."""
         with self._lock:
-            self.__init__()
+            threshold = self._similarity_threshold
+            self.__init__(similarity_threshold=threshold)
 
 
 # Module-level singleton — imported by rag_service and main

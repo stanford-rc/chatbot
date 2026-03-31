@@ -31,7 +31,8 @@
       "Bash(curl -s https://raw.githubusercontent.com/vllm-project/vllm/v0.18.0/vllm/platforms/interface.py)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(Sherlock\"\\) instead of the frontmatter title.:*)"
+      "Bash(Sherlock\"\\) instead of the frontmatter title.:*)",
+      "WebFetch(domain:matttriano.org)"
     ]
   }
 }
