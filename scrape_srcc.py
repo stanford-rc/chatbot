@@ -98,6 +98,15 @@ BUNDLES = {
             "su_course_subject",
         ],
     },
+    # Events are fetched via JSON:API so the HTML crawl can skip /events
+    # (see SKIP_PATH_PATTERNS) and avoid duplicates.
+    # su_event_components is a relationship field and won't be in attributes
+    # without ?include=, so we use the plain body field directly.
+    "stanford_event": {
+        "body_field":    "body",
+        "body_fallback": None,
+        "extra_fields":  ["su_event_dek"],   # short event summary/teaser
+    },
 }
 
 # stanford_page is intentionally absent — it uses Layout Builder paragraph
@@ -211,28 +220,41 @@ def make_session() -> requests.Session:
     return s
 
 
-def html_to_md(html: str) -> str:
-    """Convert an HTML string to Markdown, stripping empty output."""
+def html_to_md(html: str, base_url: str = "") -> str:
+    """Convert an HTML string to Markdown, stripping empty output.
+
+    If base_url is provided, relative href/src attributes are expanded to
+    absolute URLs before conversion (markdownify has no built-in base_url
+    support, so we pre-process with BeautifulSoup + urljoin).
+    """
+    if base_url:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup.find_all(href=True):
+            tag["href"] = urljoin(base_url, tag["href"])
+        for tag in soup.find_all(src=True):
+            tag["src"] = urljoin(base_url, tag["src"])
+        html = str(soup)
     return md(html, heading_style="ATX").strip()
 
 # ---------------------------------------------------------------------------
 # Path 1 — JSON:API (structured content types)
 # ---------------------------------------------------------------------------
 
-def resolve_field(attrs: dict, field_name: str) -> str:
+def resolve_field(attrs: dict, field_name: str, base_url: str = "") -> str:
     """
     Extract text from an attribute field, handling:
       - processed HTML  ({"value": ..., "processed": ...})
       - plain string
       - None / missing
     Returns a Markdown string (converts HTML if needed).
+    base_url is passed to html_to_md() to expand relative links.
     """
     val = attrs.get(field_name)
     if not val:
         return ""
     if isinstance(val, dict):
         html = val.get("processed") or val.get("value") or ""
-        return html_to_md(html) if html else ""
+        return html_to_md(html, base_url=base_url) if html else ""
     if isinstance(val, str):
         return val.strip()
     # Lists (e.g. course quarters) — join as a comma string
@@ -241,7 +263,7 @@ def resolve_field(attrs: dict, field_name: str) -> str:
     return str(val)
 
 
-def build_body_from_attrs(attrs: dict, bundle_cfg: dict) -> str:
+def build_body_from_attrs(attrs: dict, bundle_cfg: dict, base_url: str = "") -> str:
     """
     Assemble the main body text for a node using the bundle config.
     Tries body_field first, falls back to body_fallback.
@@ -249,10 +271,11 @@ def build_body_from_attrs(attrs: dict, bundle_cfg: dict) -> str:
     relationships, not attributes — they won't be in attrs unless
     ?include= is used. If empty, we fall back gracefully so the HTML
     crawl can pick up the page instead.
+    base_url is passed through to expand relative links in HTML fields.
     """
-    body = resolve_field(attrs, bundle_cfg["body_field"])
+    body = resolve_field(attrs, bundle_cfg["body_field"], base_url=base_url)
     if not body and bundle_cfg.get("body_fallback"):
-        body = resolve_field(attrs, bundle_cfg["body_fallback"])
+        body = resolve_field(attrs, bundle_cfg["body_fallback"], base_url=base_url)
     return body
 
 
@@ -309,7 +332,7 @@ def fetch_jsonapi_bundle(session: requests.Session, bundle: str, bundle_cfg: dic
             title = attrs.get("title", "Untitled")
             path  = (attrs.get("path") or {}).get("alias") or f"/node/{node['id']}"
             url   = f"{BASE_URL}{path}"
-            body  = build_body_from_attrs(attrs, bundle_cfg)
+            body  = build_body_from_attrs(attrs, bundle_cfg, base_url=url)
             extra = build_extra_meta(attrs, bundle_cfg)
             results.append({"title": title, "url": url, "body": body, "extra": extra})
 
@@ -380,10 +403,11 @@ def strip_noise(soup: BeautifulSoup):
                 el.decompose()
 
 
-def extract_layout_builder_content(soup: BeautifulSoup) -> str:
+def extract_layout_builder_content(soup: BeautifulSoup, base_url: str = "") -> str:
     """
     SDP Layout Builder assembles pages from multiple region divs.
     Collect all of them, deduplicate, and concatenate.
+    base_url is passed to html_to_md() to expand relative links.
     """
     regions = []
     for tag, cls in LAYOUT_BUILDER_SELECTORS:
@@ -392,16 +416,16 @@ def extract_layout_builder_content(soup: BeautifulSoup) -> str:
     if regions:
         seen = set()
         unique = [r for r in regions if not (id(r) in seen or seen.add(id(r)))]
-        return html_to_md("\n\n".join(str(r) for r in unique))
+        return html_to_md("\n\n".join(str(r) for r in unique), base_url=base_url)
 
     # Single-element fallbacks
     for attrs in CONTENT_SELECTORS:
         el = soup.find(attrs=attrs)
         if el:
-            return html_to_md(str(el))
+            return html_to_md(str(el), base_url=base_url)
 
     body = soup.find("body") or soup
-    return html_to_md(str(body))
+    return html_to_md(str(body), base_url=base_url)
 
 
 def extract_title(soup: BeautifulSoup, url: str) -> str:
@@ -459,7 +483,7 @@ def run_html_crawl(session: requests.Session, written_urls: set) -> int:
 
         strip_noise(soup)
         title         = extract_title(soup, url)
-        markdown_body = extract_layout_builder_content(soup)
+        markdown_body = extract_layout_builder_content(soup, base_url=url)
 
         if not markdown_body.strip():
             logging.warning(f"No content extracted (HTML): {url}")
