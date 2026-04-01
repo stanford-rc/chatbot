@@ -70,6 +70,7 @@ class Settings(BaseSettings):
 
     # Logging settings
     LOG_DIR: str = Field(default=config.get('logging', {}).get('log_dir', 'logs'), env="LOG_DIR")
+    STATS_LOG: str = config.get('logging', {}).get('stats_log', '')
 
     # Worker configuration (multi-GPU mode)
     WORKERS: list = config.get('workers', [

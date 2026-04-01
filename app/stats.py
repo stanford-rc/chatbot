@@ -11,6 +11,7 @@ model as the semantic cache (runs on CPU, no GPU impact).
 Access via GET /stats.
 """
 
+import json
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -43,9 +44,16 @@ class StatsTracker:
         # Embedding model — injected after startup via set_embedding_model()
         self._embedding_model = None
 
+        # Path to append-only JSON-lines log — injected via set_log_path()
+        self._log_path: str = ''
+
     def set_embedding_model(self, model) -> None:
         """Inject the sentence-transformers model after it's loaded at startup."""
         self._embedding_model = model
+
+    def set_log_path(self, path: str) -> None:
+        """Inject the stats log file path from settings."""
+        self._log_path = path
 
     # ── Recording ──────────────────────────────────────────────────────────
 
@@ -109,6 +117,22 @@ class StatsTracker:
             # Hourly bucket (UTC)
             hour_key = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:00 UTC")
             self.queries_by_hour[hour_key] += 1
+
+            # Append one JSON line to the persistent stats log
+            if self._log_path:
+                try:
+                    record = {
+                        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "cluster": cluster,
+                        "query": query,
+                        "latency_s": round(latency_s, 3),
+                        "cache_hit": cache_hit,
+                        "error": error,
+                    }
+                    with open(self._log_path, 'a') as f:
+                        f.write(json.dumps(record) + '\n')
+                except Exception:
+                    pass  # never let logging break query serving
 
         # Semantic collapsing runs outside the main lock (embedding is slow)
         self._find_or_create_canonical(query)

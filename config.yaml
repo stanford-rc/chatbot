@@ -114,6 +114,7 @@ server:
 # Logging Settings
 logging:
   log_dir: "logs"
+  stats_log: "/workspace/logs/stats.jsonl"
 
 # Worker Configuration (multi-GPU mode)
 workers:
