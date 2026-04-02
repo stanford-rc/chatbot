@@ -75,7 +75,12 @@ class RAGService:
                     post = frontmatter.load(file_path)
                     metadata = post.metadata
                     metadata['source'] = filename
-                    doc = Document(page_content=post.content, metadata=metadata)
+                    # Prepend title to body so chunks inherit it for BM25/FAISS.
+                    # Without this, a doc titled "Classes and Workshops" whose body
+                    # says "Upcoming Classes" is invisible to "workshop" queries.
+                    title = metadata.get('title', '')
+                    body = f"# {title}\n\n{post.content}" if title else post.content
+                    doc = Document(page_content=body, metadata=metadata)
                     documents.append(doc)
                     logger.info(f"Loaded document from {file_path}")
                 except Exception as e:
