@@ -85,6 +85,7 @@ retrieval:
   HYBRID_ENABLED: true
   VECTOR_MODEL: "/home/users/bcritt/apichatbot/models/all-MiniLM-L6-v2"
   RRF_K: 60               # Reciprocal rank fusion constant
+  FAISS_RRF_WEIGHT: 1.5   # FAISS weight in RRF (>1 = prefer semantic over keyword)
 
 # Grounding check
 grounding:

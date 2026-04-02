@@ -177,7 +177,7 @@ class RAGService:
 
     def _load_retrievers(self):
         """Load BM25 and (optionally) FAISS retrievers for each cluster"""
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
 
         # Load embedding model once if hybrid retrieval is enabled
         if self.settings.HYBRID_ENABLED and FAISS_AVAILABLE:
@@ -279,8 +279,13 @@ class RAGService:
         bm25_results: List[Tuple[Document, float]],
         faiss_results: List[Tuple[Document, float]],
     ) -> List[Document]:
-        """Merge two ranked lists using reciprocal rank fusion (RRF)."""
+        """Merge two ranked lists using reciprocal rank fusion (RRF).
+
+        FAISS (semantic) results are weighted by FAISS_RRF_WEIGHT so that
+        semantic similarity has more influence than raw keyword frequency.
+        """
         k = self.settings.RRF_K
+        faiss_weight = self.settings.FAISS_RRF_WEIGHT
         # Use page_content as dedup key since the same chunk can appear in both lists
         rrf_scores: Dict[str, float] = defaultdict(float)
         doc_map: Dict[str, Document] = {}
@@ -292,7 +297,7 @@ class RAGService:
 
         for rank, (doc, _score) in enumerate(faiss_results):
             key = doc.page_content
-            rrf_scores[key] += 1.0 / (k + rank + 1)
+            rrf_scores[key] += faiss_weight / (k + rank + 1)
             doc_map[key] = doc
 
         # Sort by fused score descending

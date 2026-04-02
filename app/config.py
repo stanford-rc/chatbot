@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     HYBRID_ENABLED: bool = config.get('retrieval', {}).get('HYBRID_ENABLED', False)
     VECTOR_MODEL: str = config.get('retrieval', {}).get('VECTOR_MODEL', 'all-MiniLM-L6-v2')
     RRF_K: int = config.get('retrieval', {}).get('RRF_K', 60)
+    FAISS_RRF_WEIGHT: float = config.get('retrieval', {}).get('FAISS_RRF_WEIGHT', 1.5)
 
     # Grounding check settings
     GROUNDING_CHECK_ENABLED: bool = config.get('grounding', {}).get('GROUNDING_CHECK_ENABLED', True)
