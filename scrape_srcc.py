@@ -414,8 +414,20 @@ def extract_layout_builder_content(soup: BeautifulSoup, base_url: str = "") -> s
         regions.extend(soup.find_all(tag, class_=cls))
 
     if regions:
-        seen = set()
-        unique = [r for r in regions if not (id(r) in seen or seen.add(id(r)))]
+        seen_ids = set()
+        seen_text = set()
+        unique = []
+        for r in regions:
+            if id(r) in seen_ids:
+                continue
+            seen_ids.add(id(r))
+            # Deduplicate by content fingerprint — catches two separate DOM nodes
+            # that render the same section (e.g. Layout Builder calendar duplication)
+            fingerprint = r.get_text(separator=" ", strip=True)[:300]
+            if fingerprint in seen_text:
+                continue
+            seen_text.add(fingerprint)
+            unique.append(r)
         return html_to_md("\n\n".join(str(r) for r in unique), base_url=base_url)
 
     # Single-element fallbacks

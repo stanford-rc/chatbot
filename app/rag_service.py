@@ -95,6 +95,7 @@ class RAGService:
             try:
                 self.semantic_cache = SemanticResponseCache(
                     db_path=self.settings.SEMANTIC_CACHE_DB,
+                    model_name=self.settings.VECTOR_MODEL,
                     similarity_threshold=self.settings.SEMANTIC_CACHE_THRESHOLD
                 )
                 if self.settings.SEMANTIC_CACHE_CLEAR_ON_STARTUP:
