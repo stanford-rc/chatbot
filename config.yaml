@@ -88,7 +88,7 @@ retrieval:
 
   # Hybrid retrieval: combine BM25 (keyword) with FAISS (semantic) search
   HYBRID_ENABLED: true
-  VECTOR_MODEL: "/home/users/bcritt/apichatbot/models/all-MiniLM-L6-v2"
+  VECTOR_MODEL: "/home/users/bcritt/apichatbot/models/gte-large-en-v1.5"
   RRF_K: 60               # Reciprocal rank fusion constant
   FAISS_RRF_WEIGHT: 2.0   # FAISS weight in RRF (>1 = prefer semantic over keyword)
 

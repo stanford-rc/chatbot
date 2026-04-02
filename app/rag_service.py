@@ -252,7 +252,7 @@ class RAGService:
         # Load embedding model once if hybrid retrieval is enabled
         if self.settings.HYBRID_ENABLED and FAISS_AVAILABLE:
             logger.info(f"Loading embedding model for hybrid retrieval (CPU): {self.settings.VECTOR_MODEL}")
-            self.embedding_model = SentenceTransformer(self.settings.VECTOR_MODEL, device='cpu')
+            self.embedding_model = SentenceTransformer(self.settings.VECTOR_MODEL, device='cpu', trust_remote_code=True)
             logger.info("Embedding model loaded on CPU.")
             stats_tracker.set_embedding_model(self.embedding_model)
         elif self.settings.HYBRID_ENABLED and not FAISS_AVAILABLE:

@@ -44,7 +44,7 @@ class SemanticResponseCache:
         # Load embedding model on CPU — GPU is reserved entirely for the LLM.
         # all-MiniLM-L6-v2 is 90 MB and fast enough on CPU for cache lookups.
         logger.info(f"Loading embedding model (CPU): {model_name}")
-        self.model = SentenceTransformer(model_name, device='cpu')
+        self.model = SentenceTransformer(model_name, device='cpu', trust_remote_code=True)
         logger.info("✓ Embedding model loaded on CPU")
         
         # Initialize database
