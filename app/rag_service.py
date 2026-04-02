@@ -9,7 +9,7 @@ import frontmatter
 import numpy as np
 from fastapi import HTTPException
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 from langchain_community.cache import SQLiteCache
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.globals import set_llm_cache
@@ -86,6 +86,72 @@ class RAGService:
                 except Exception as e:
                     logger.warning(f"Could not read or parse front matter from file {file_path}: {e}")
         return documents
+
+    def _split_documents(self, documents: List[Document]) -> List[Document]:
+        """Split documents using header-aware strategy.
+
+        1. Small docs (≤ chunk_size): kept whole.
+        2. Docs with ## headers: split on ## boundaries so each section is a
+           self-contained chunk.  The doc title prefix (# Title) is prepended
+           to every section chunk so BM25/FAISS can match on it.
+        3. Docs without ## headers: fall back to character splitting.
+        4. Any single section that exceeds chunk_size is sub-split with
+           RecursiveCharacterTextSplitter.
+        """
+        chunk_size = self.settings.CHUNK_SIZE
+        chunk_overlap = self.settings.CHUNK_OVERLAP
+
+        md_splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=[("##", "section")],
+            strip_headers=False,
+        )
+        char_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+
+        all_chunks: List[Document] = []
+        for doc in documents:
+            content = doc.page_content
+
+            # Small docs: no splitting needed
+            if len(content) <= chunk_size:
+                all_chunks.append(doc)
+                continue
+
+            # Try header-based splitting
+            if "\n## " in content:
+                # Extract the title prefix (everything before first ##)
+                first_h2 = content.find("\n## ")
+                title_prefix = content[:first_h2].strip() + "\n\n" if first_h2 > 0 else ""
+
+                md_chunks = md_splitter.split_text(content)
+
+                for md_chunk in md_chunks:
+                    section_header = md_chunk.metadata.get("section", "")
+                    # The splitter rolls # Title into the first ## chunk.
+                    # Only prepend title_prefix to subsequent chunks that
+                    # don't already contain it.
+                    chunk_text = md_chunk.page_content
+                    if title_prefix and not chunk_text.startswith(title_prefix.strip()):
+                        chunk_text = title_prefix + chunk_text
+
+                    chunk_metadata = {**doc.metadata, "section_header": section_header}
+
+                    if len(chunk_text) <= chunk_size:
+                        all_chunks.append(Document(
+                            page_content=chunk_text,
+                            metadata=chunk_metadata,
+                        ))
+                    else:
+                        # Oversized section: sub-split with character splitter
+                        sub_doc = Document(page_content=chunk_text, metadata=chunk_metadata)
+                        all_chunks.extend(char_splitter.split_documents([sub_doc]))
+            else:
+                # No ## headers: fall back to character splitting
+                all_chunks.extend(char_splitter.split_documents([doc]))
+
+        return all_chunks
 
     def _setup_caching(self):
         """Initialize LangChain and semantic caching"""
@@ -182,7 +248,6 @@ class RAGService:
 
     def _load_retrievers(self):
         """Load BM25 and (optionally) FAISS retrievers for each cluster"""
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
 
         # Load embedding model once if hybrid retrieval is enabled
         if self.settings.HYBRID_ENABLED and FAISS_AVAILABLE:
@@ -217,7 +282,7 @@ class RAGService:
             # scoring — a Sherlock query will rank Sherlock-relevant shared docs
             # higher without any explicit filtering needed.
             all_documents = documents + shared_docs
-            split_docs = text_splitter.split_documents(all_documents)
+            split_docs = self._split_documents(all_documents)
             self.retrievers[cluster_name] = BM25Retriever.from_documents(split_docs)
             logger.info(f"Created BM25 retriever for '{cluster_name}' ({len(split_docs)} chunks).")
 
@@ -359,12 +424,19 @@ class RAGService:
                 for doc in retrieved_docs
             ]
 
+            # Build document labels: include section header when present
+            # so the LLM sees "Classes and Workshops > Upcoming Classes"
+            def _doc_label(doc, title):
+                section = doc.metadata.get('section_header', '')
+                return f"{title} > {section}" if section else title
+
             # Lead with an explicit title list so the model knows the exact
             # strings it must use when citing — prevents invented titles like
             # "Scheduling on Sherlock" that don't match any retrieved document.
+            # Citation list uses bare titles only (not section labels).
             title_list = "\n".join(f"  - {t}" for t in titles)
             docs_text = "\n\n".join(
-                f"--- Document: {title} ---\n{_clean_content(doc.page_content)}"
+                f"--- Document: {_doc_label(doc, title)} ---\n{_clean_content(doc.page_content)}"
                 for title, doc in zip(titles, retrieved_docs)
             )
             return (

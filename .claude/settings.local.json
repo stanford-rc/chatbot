@@ -32,7 +32,12 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(Sherlock\"\\) instead of the frontmatter title.:*)",
-      "WebFetch(domain:matttriano.org)"
+      "WebFetch(domain:matttriano.org)",
+      "Bash(grep -c \"^##\" /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/sherlock/*.md)",
+      "Bash(sort -t: -k2 -n)",
+      "Bash(wc -c /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/sherlock/*.md)",
+      "Bash(head -30 /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/farmshare/*.md)",
+      "Bash(head -30 /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/oak/*.md)"
     ]
   }
 }

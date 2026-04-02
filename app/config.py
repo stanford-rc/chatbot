@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     MIN_BM25_SCORE: float = config.get('retrieval', {}).get('MIN_BM25_SCORE', 2.0)
     HYBRID_ENABLED: bool = config.get('retrieval', {}).get('HYBRID_ENABLED', False)
     VECTOR_MODEL: str = config.get('retrieval', {}).get('VECTOR_MODEL', 'all-MiniLM-L6-v2')
+    CHUNK_SIZE: int = config.get('retrieval', {}).get('CHUNK_SIZE', 2000)
+    CHUNK_OVERLAP: int = config.get('retrieval', {}).get('CHUNK_OVERLAP', 200)
     RRF_K: int = config.get('retrieval', {}).get('RRF_K', 60)
     FAISS_RRF_WEIGHT: float = config.get('retrieval', {}).get('FAISS_RRF_WEIGHT', 1.5)
 

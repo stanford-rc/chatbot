@@ -69,6 +69,11 @@ retrieval:
   # Maximum number of documents to retrieve per query
   MAX_RETRIEVED_DOCS: 5
 
+  # Chunking strategy — docs are split on ## headers first, with character
+  # splitting as fallback for oversized sections or headerless docs.
+  CHUNK_SIZE: 2000
+  CHUNK_OVERLAP: 200
+
   # BM25 parameters (optional tuning)
   # BM25_K1: 1.5
   # BM25_B: 0.75
