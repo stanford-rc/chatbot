@@ -265,13 +265,19 @@ class RAGService:
             [query], normalize_embeddings=True
         ).astype(np.float32)
 
-        k = min(self.settings.MAX_RETRIEVED_DOCS * 2, store["index"].ntotal)
+        k = min(self.settings.MAX_RETRIEVED_DOCS * 3, store["index"].ntotal)
         scores, indices = store["index"].search(query_embedding, k)
 
         results = []
         for score, idx in zip(scores[0], indices[0]):
             if idx >= 0:  # FAISS returns -1 for missing results
                 results.append((store["docs"][idx], float(score)))
+
+        # Log top FAISS results (matching BM25 logging pattern)
+        for doc, score in results[:self.settings.MAX_RETRIEVED_DOCS]:
+            title = doc.metadata.get('title', doc.metadata.get('source', 'Unknown'))
+            logger.info(f"FAISS score={score:.4f} for '{title}'")
+
         return results
 
     def _reciprocal_rank_fusion(
