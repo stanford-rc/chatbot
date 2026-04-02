@@ -71,7 +71,7 @@ retrieval:
 
   # Chunking strategy — docs are split on ## headers first, with character
   # splitting as fallback for oversized sections or headerless docs.
-  CHUNK_SIZE: 2000
+  CHUNK_SIZE: 2500
   CHUNK_OVERLAP: 200
 
   # BM25 parameters (optional tuning)
