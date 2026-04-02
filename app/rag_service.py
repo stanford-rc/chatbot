@@ -550,15 +550,14 @@ class RAGService:
     )
 
     # Keywords that suggest the answer is about cluster-specific configuration
+    # (Slurm commands, partitions, storage paths, etc.) where ungrounded answers
+    # could be harmful.  General SRC/organizational terms (workshops, classes,
+    # events, people) should NOT trigger the disclaimer.
     _CLUSTER_SPECIFIC_PATTERNS = re.compile(
         r'\b(?:partition|sbatch|srun|squeue|scancel|salloc|sinfo|scontrol'
-        r'|module\s+load|module\s+avail|scratch|oak|sherlock|farmshare|elm'
-        r'|slurm|quota|storage|node|gpu\s+partition|memory\s+limit'
-        r'|job\s+submit|batch\s+script|queue'
-        # Also catch refusal messages that mention SRCC/HPC context — these fire
-        # when the model correctly declines off-topic questions but the grounding
-        # disclaimer should still be appended so users know where to ask instead.
-        r'|srcc|stanford\s+research|hpc\s+cluster|computing\s+center)\b',
+        r'|module\s+load|module\s+avail|scratch|oak'
+        r'|slurm|quota|storage\s+(?:limit|quota|policy)|gpu\s+partition|memory\s+limit'
+        r'|job\s+submit|batch\s+script|queue)\b',
         re.IGNORECASE,
     )
 

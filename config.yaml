@@ -13,7 +13,7 @@ model:
 
 # Generation Parameters
 generation:
-  max_new_tokens: 512
+  max_new_tokens: 1024
   do_sample: false  # Greedy decoding for speed
   num_beams: 1      # No beam search
   temperature: null # Disabled for greedy
