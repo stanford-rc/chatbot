@@ -197,20 +197,15 @@ class RAGService:
         os.environ.setdefault('VLLM_WORKER_MULTIPROC_TIMEOUT', '600') # 10 min (s)
 
         # ── NCCL transport override ──────────────────────────────────────────
-        # L4 GPUs are PCIe-only (no NVLink).  Inside Apptainer, NCCL's normal
-        # transport selection hangs:
-        #   1. P2P (PCIe peer-mem)  — blocked by IOMMU / cgroup inside container
-        #   2. SHM (shared-memory)  — also hangs when NCCL's shm region name
-        #                            collides with the container's mount namespace
-        # Disabling both forces NCCL to use pure TCP socket on the loopback
-        # interface.  Loopback bandwidth ≈ 10-20 GB/s; the TP all-reduce for
-        # Qwen 32B at seq_len=512 is ~5 MB/layer × 64 layers ≈ ~320 MB total
-        # → ~32 ms extra latency per forward pass.  Acceptable for a chatbot.
-        # Use direct assignment (not setdefault) so these always win over any
-        # stale env var inherited from the shell.
-        os.environ['NCCL_P2P_DISABLE'] = '1'     # disable PCIe peer-mem
-        os.environ['NCCL_SHM_DISABLE'] = '1'     # disable shared-mem transport
-        os.environ['NCCL_SOCKET_IFNAME'] = 'lo'  # force loopback socket
+        # L4 GPUs are PCIe-only (no NVLink).  Inside Apptainer, NCCL's P2P
+        # transport (PCIe peer-mem) is blocked by IOMMU / cgroup isolation.
+        # SHM (shared-memory) transport works if orphaned /dev/shm segments
+        # are cleaned up before startup (main.sh handles this).  SHM is ~10x
+        # faster than socket for all-reduce, significantly reducing startup
+        # warmup time.
+        os.environ['NCCL_P2P_DISABLE'] = '1'     # disable PCIe peer-mem (IOMMU)
+        os.environ.pop('NCCL_SHM_DISABLE', None)  # allow SHM transport
+        os.environ['NCCL_SOCKET_IFNAME'] = 'lo'  # fallback socket on loopback
         os.environ['NCCL_DEBUG'] = 'WARN'        # surface NCCL errors in log
 
         self.model = LLM(
