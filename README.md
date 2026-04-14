@@ -1,21 +1,29 @@
 # SRCC Chatbot
 
-A RAG (Retrieval-Augmented Generation) API for Stanford Research Computing Center (SRCC) documentation. Answers questions about the Sherlock, Farmshare, Oak, Elm, Carina, Nero, and SRCC clusters using documentation scraped from their GitHub repos and websites.
+A RAG (Retrieval-Augmented Generation) API for Stanford Research Computing Center (SRCC) documentation. Answers questions about the Sherlock, Farmshare, Oak, Elm, Carina, and Nero clusters using documentation scraped from their GitHub repos and websites.
+
+Runs on `ada-lovelace.stanford.edu` — 96 Ampere-1a cores, 378 GB RAM, 2x NVIDIA L4 GPUs (22.5 GiB each).
 
 ---
 
 ## Architecture
 
 ```
-Client → FastAPI (app/main.py)
-           └─ RAGService
-                ├─ vLLM (Qwen3-32B-AWQ, tensor_parallel_size=2)
-                ├─ BM25 retriever (per cluster)
-                ├─ FAISS vector index (per cluster, hybrid mode)
-                └─ Semantic response cache (SQLite + sentence-transformers)
+Client -> FastAPI (app/main.py)
+            +-- RAGService
+                 |-- vLLM (Qwen3-32B-AWQ, tensor_parallel_size=2)
+                 |-- BM25 retriever (per cluster)
+                 |-- FAISS vector index (per cluster, hybrid mode)
+                 |   +-- gte-large-en-v1.5 embeddings (CPU)
+                 +-- Semantic response cache (SQLite + sentence-transformers)
+                      +-- Content-aware invalidation via scraper manifests
 ```
 
-The model runs with `tensor_parallel_size=2`, occupying both NVIDIA L4 GPUs in a single vLLM worker. vLLM's async continuous-batching engine handles all concurrent requests natively — no separate load balancer is needed.
+The model runs with `tensor_parallel_size=2`, occupying both L4 GPUs in a single vLLM worker. vLLM's async continuous-batching engine handles all concurrent requests natively — no separate load balancer is needed.
+
+**Retrieval pipeline:** Each query is run through both BM25 (keyword) and FAISS (semantic) retrievers. Results are merged via Reciprocal Rank Fusion (RRF), with FAISS weighted higher by default. Documents are split on `##` header boundaries to preserve section semantics (e.g., "Upcoming Classes" vs "Recent Classes").
+
+**Cache invalidation:** When the scrapers run, they produce content manifests (SHA-256 hashes per file). On the next service restart, the RAG service compares the current manifest against the previous one and evicts only the cache entries whose source documents changed. Stable content stays cached.
 
 ---
 
@@ -23,8 +31,8 @@ The model runs with `tensor_parallel_size=2`, occupying both NVIDIA L4 GPUs in a
 
 - Apptainer/Singularity
 - Python 3.x with PyYAML on the host (for reading `config.yaml` in shell scripts)
-- 2× NVIDIA L4 GPUs (or equivalent with 22+ GiB VRAM each)
-- Model files downloaded to the path set in `config.yaml` (see `setup_upgrade.sh`)
+- 2x NVIDIA L4 GPUs (or equivalent with 22+ GiB VRAM each)
+- Model files downloaded to the paths set in `config.yaml` (see `setup_upgrade.sh`)
 
 ---
 
@@ -63,13 +71,13 @@ curl http://ada-lovelace.stanford.edu:8000/docs
 - Reads model path, port, host, and log dir from `config.yaml`
 - Validates the model directory exists and contains `config.json`
 - Builds `chatbot.sif` from `chatbot.def` if not already built
-- Starts the Apptainer instance with GPU support; binds `$PWD → /workspace` and the parent models directory so both the LLM and the embedding model are accessible
+- Starts the Apptainer instance with GPU support; binds `$PWD -> /workspace` and the parent models directory so both the LLM and the embedding model are accessible
 - Launches uvicorn serving `app.main:app` on `0.0.0.0:<port>`
-- Model loading takes ~3–4 minutes; watch for `Application startup complete`
+- Model loading takes several minutes; watch for `Application startup complete`
 
 **Dev mode** (`./main.sh dev`):
 - Same as production but adds `--reload --reload-dir app` to uvicorn
-- Each code change triggers a full model reload (~3–4 min); use only when needed
+- Each code change triggers a full model reload; use only when needed
 
 **Multi mode**: Exits immediately with an error. `tensor_parallel_size=2` occupies both GPUs in a single worker — a second worker would OOM immediately.
 
@@ -81,11 +89,12 @@ curl http://ada-lovelace.stanford.edu:8000/docs
 ./filemagic.sh
 ```
 
-Builds the `file_processing.sif` Apptainer container (if not already present), then runs three scripts inside it in sequence:
+Builds the `file_processing.sif` Apptainer container (if not already present), then runs four steps inside it in sequence:
 
 1. **`file_magic.py`** — clones GitHub repos and converts their MkDocs documentation to flat `.md` files under `docs/`
-2. **`scrape_srcc.py`** — crawls `https://srcc.stanford.edu` → `docs/srcc/`
-3. **`scrape_static_docs.py`** — crawls Carina and Nero documentation sites → `docs/carina/`, `docs/nero/`
+2. **`scrape_srcc.py`** — crawls `https://srcc.stanford.edu` -> `docs/srcc/`
+3. **`scrape_static_docs.py`** — crawls Carina and Nero documentation sites -> `docs/carina/`, `docs/nero/`
+4. **`generate_manifests.py`** — writes `.content_manifest.json` in each docs subdirectory (SHA-256 hashes per file, used for cache invalidation on next restart)
 
 ---
 
@@ -205,7 +214,7 @@ For each repo:
 | Variable | Default | Description |
 |---|---|---|
 | `REPO_CLONE_DIR` | `docs` | Base directory for cloned repos and output |
-| `GITHUB_TOKEN` | — | Token for authenticated GitHub cloning |
+| `GITHUB_TOKEN` | -- | Token for authenticated GitHub cloning |
 | `LOG_FILE` | `magicFile.log` | Log file path |
 
 ---
@@ -220,7 +229,8 @@ Two-pass scraper for `https://srcc.stanford.edu`. Output: `docs/srcc/`.
 - Nodes with no body content are deferred to the HTML pass
 
 **Pass 2 — HTML crawl** picks up `stanford_page` (Layout Builder) and any pages missed by JSON:API:
-- Extracts content from Layout Builder regions; strips nav, header, footer, scripts, Drupal placeholders
+- Extracts content from Layout Builder regions; deduplicates by content fingerprint (first 300 chars)
+- Strips nav, header, footer, scripts, Drupal placeholders
 - Filters non-HTTP links (`mailto:`, `tel:`, `javascript:`), external domains, binary assets, and noise paths (`/user`, `/admin`, `/search`, `/events`, etc.)
 
 **Environment variables:**
@@ -262,6 +272,19 @@ python scrape_static_docs.py nero
 
 ---
 
+### `generate_manifests.py` — Content manifests for cache invalidation
+
+```bash
+python generate_manifests.py              # default: docs/
+python generate_manifests.py /path/to/docs
+```
+
+Writes a `.content_manifest.json` file in each docs subdirectory. Each manifest maps filenames to SHA-256 hashes. The RAG service compares these at startup to detect which docs changed since the last scrape and selectively evicts stale cache entries.
+
+Called automatically at the end of `filemagic.sh`.
+
+---
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -270,7 +293,8 @@ python scrape_static_docs.py nero
 | `GET` | `/health` | Health check — 503 if model not loaded or no retrievers |
 | `POST` | `/query/` | Submit a question; returns answer, cluster, and sources |
 | `POST` | `/cache/clear` | Flush the semantic response cache |
-| `GET` | `/stats` | Worker info: device, model type, clusters, cache status |
+| `GET` | `/stats` | JSON metrics: latency percentiles, cache hit rate, per-cluster counts, top queries |
+| `GET` | `/dashboard` | Live monitoring dashboard (Chart.js UI, auto-refreshes every 30 s) |
 | `GET` | `/docs` | Auto-generated OpenAPI UI |
 
 **Query request:**
@@ -290,80 +314,143 @@ python scrape_static_docs.py nero
 
 ---
 
-## Configuration
+## Monitoring
+
+### Dashboard
+
+The built-in dashboard is at `/dashboard`. Since ada-lovelace is not directly accessible from a browser, use an SSH tunnel:
+
+```bash
+ssh -L 8000:localhost:8000 bcritt@ada-lovelace.stanford.edu
+# Then open: http://localhost:8000/dashboard
+```
+
+The dashboard displays:
+- **KPI cards** — total queries, cache hit rate, average latency, p95/p99 latency, error count
+- **Charts** — queries by hour (last 24 h), cache hit/miss ratio, queries by cluster, latency distribution
+- **Top queries** — 10 most frequent queries (grouped by semantic similarity)
+
+Auto-refreshes every 30 seconds. All metrics are in-memory and reset on service restart.
+
+### Logs
+
+| File | Contents |
+|------|----------|
+| `logs/myapp.log` | Application log — startup, retrieval scores, cache hits/misses, errors |
+| `logs/stats.jsonl` | Append-only per-query stats: timestamp, cluster, query, latency, cache hit, error |
+| `logs/scrapers.log` | Output from `scrape_srcc.py` and `scrape_static_docs.py` |
+
+`stats.jsonl` persists across restarts (append-only). The `/stats` endpoint reads from in-memory counters for fast access; `stats.jsonl` is the durable record.
+
+---
+
+## Configuration Reference
 
 All settings live in `config.yaml`. Shell scripts and the Python app both read from it directly — it is the single source of truth.
 
+### `model` — LLM settings
+
+| Key | Default | Description |
+|---|---|---|
+| `path` | -- | Absolute path to the model directory on disk. Must contain `config.json`. |
+| `type` | `"qwen"` | Model architecture. Controls prompt format: `"qwen"` uses system/human chat roles; `"llama"` uses `[INST]` tags. |
+| `device` | `"cuda"` | `"cuda"` or `"cpu"`. |
+| `use_quantization` | `false` | Whether to apply runtime quantization. `false` for pre-quantized models (AWQ). |
+| `local_files_only` | `true` | Prevent HuggingFace hub downloads at runtime. |
+| `dtype` | `"half"` | vLLM dtype. `"half"` (float16) required for AWQ models; `"bfloat16"` for non-quantized. |
+
+### `generation` — Response generation
+
+| Key | Default | Description |
+|---|---|---|
+| `max_new_tokens` | `1024` | Maximum tokens in the generated response. Increase for longer answers (e.g., workshop lists). |
+| `do_sample` | `false` | `false` for greedy decoding (deterministic). `true` enables sampling. |
+| `num_beams` | `1` | Beam search width. `1` disables beam search. |
+| `temperature` | `null` | Sampling temperature. `null` disables (greedy). |
+
+### `app` — Application metadata
+
+| Key | Default | Description |
+|---|---|---|
+| `title` | `"SRC Cluster Knowledge Base API"` | Shown in the OpenAPI docs page. |
+| `description` | -- | API description for OpenAPI. |
+| `version` | `"1.0.0"` | API version string. |
+
+### `api` — API settings
+
+| Key | Default | Description |
+|---|---|---|
+| `cors_origins` | `[]` | List of allowed CORS origins for the frontend. |
+
+### `caching` — Response caching
+
+| Key | Default | Description |
+|---|---|---|
+| `SEMANTIC_CACHE_ENABLED` | `true` | Enable the semantic response cache. Requires `sentence-transformers`. |
+| `SEMANTIC_CACHE_CLEAR_ON_STARTUP` | `false` | Flush entire cache on every restart. Use `true` during development. In production, leave `false` — content-aware invalidation handles staleness automatically. |
+| `SEMANTIC_CACHE_THRESHOLD` | `0.70` | Cosine similarity threshold (0.0--1.0). Lower = more permissive matching. 0.70--0.75 recommended. |
+| `SEMANTIC_CACHE_DB` | `"/workspace/.response_cache.db"` | Absolute path to the SQLite cache file. Use `/workspace/` prefix so it lands in the bind-mounted host directory. |
+| `LANGCHAIN_CACHE_DB` | `"/workspace/.langchain.db"` | LangChain's internal LLM cache (exact prompt dedup). |
+
+### `retrieval` — Document retrieval
+
+| Key | Default | Description |
+|---|---|---|
+| `MAX_RETRIEVED_DOCS` | `5` | Number of documents passed to the LLM as context. |
+| `CHUNK_SIZE` | `2500` | Maximum characters per chunk. Docs are split on `##` headers first; oversized sections fall back to character splitting. |
+| `CHUNK_OVERLAP` | `200` | Character overlap between chunks (character splitter only). |
+| `MIN_BM25_SCORE` | `1.0` | BM25 score floor. Documents below this are discarded. `0.0` disables filtering. |
+| `HYBRID_ENABLED` | `true` | Combine BM25 (keyword) and FAISS (semantic) retrieval via reciprocal rank fusion. |
+| `VECTOR_MODEL` | -- | Path to the sentence-transformer embedding model. Currently `gte-large-en-v1.5` (434M params, MTEB 65.4). |
+| `RRF_K` | `60` | Reciprocal rank fusion constant. Higher values compress rank differences. |
+| `FAISS_RRF_WEIGHT` | `2.0` | FAISS weight in RRF scoring. `>1.0` prefers semantic matches over keyword matches. |
+
+### `grounding` — Answer safety
+
+| Key | Default | Description |
+|---|---|---|
+| `GROUNDING_CHECK_ENABLED` | `true` | Append a disclaimer when the answer discusses cluster-specific topics (Slurm commands, partitions, storage) but cites no retrieved documents. |
+| `REFUSAL_DISCLAIMER` | -- | The disclaimer text appended to ungrounded answers. |
+
+### `clusters` — Documentation paths
+
+Maps cluster names to their documentation directories (relative to `$PWD`). Each cluster gets its own BM25 + FAISS retriever pair.
+
 ```yaml
-model:
-  path: /path/to/your/model   # Must exist on disk; validated at startup
-  type: "qwen"                # Model architecture — controls prompt format:
-                              #   "qwen" → system/human chat roles
-                              #   "llama" → [INST] tags
-  device: "cuda"              # "cpu" or "cuda"
-  use_quantization: false
-  local_files_only: true
-  dtype: "half"               # vLLM dtype: "half" (float16) required for AWQ models;
-                              # "bfloat16" for non-quantized models that don't support float16
-
-generation:
-  max_new_tokens: 512
-  do_sample: false            # Greedy decoding
-  num_beams: 1
-  temperature: null
-
-app:
-  title: "SRC Cluster Knowledge Base API"
-  description: "..."
-  version: "1.0.0"
-
-api:
-  cors_origins:
-    - "http://localhost:4000"
-    - "https://docs-dev.carina.stanford.edu"
-    - "https://ada-lovelace.stanford.edu"
-
-caching:
-  SEMANTIC_CACHE_ENABLED: true
-  SEMANTIC_CACHE_THRESHOLD: 0.70   # Cosine similarity threshold (0–1); lower = more permissive
-  SEMANTIC_CACHE_DB: "/workspace/.response_cache.db"
-  LANGCHAIN_CACHE_DB: "/workspace/.langchain.db"
-
-retrieval:
-  MAX_RETRIEVED_DOCS: 5
-  MIN_BM25_SCORE: 1.0              # Docs below this score are discarded; 0.0 disables
-  HYBRID_ENABLED: true             # Combine BM25 + FAISS via reciprocal rank fusion
-  VECTOR_MODEL: "/path/to/models/all-MiniLM-L6-v2"  # local path or HuggingFace model name
-  RRF_K: 60                        # Reciprocal rank fusion constant
-
-grounding:
-  GROUNDING_CHECK_ENABLED: true
-  REFUSAL_DISCLAIMER: "Note: This answer may not reflect your cluster's specific configuration..."
-
-clusters:                          # Doc directory paths, relative to $PWD
+clusters:
   sherlock: "docs/sherlock/"
   farmshare: "docs/farmshare/"
   oak: "docs/oak/"
   elm: "docs/elm/"
-  carina: "docs/carina"
-  nero: "docs/nero"
-  src: "docs/src"
-
-server:
-  api_port: 8000
-  host: "ada-lovelace.stanford.edu"
-
-logging:
-  log_dir: "logs"
-
-workers:                           # Used only by the deprecated load_balancer.py
-  - url: "http://localhost:8001"
-    port: 8001
-    gpu: "cuda:0"
-  - url: "http://localhost:8002"
-    port: 8002
-    gpu: "cuda:1"
+  carina: "docs/carina/"
+  nero: "docs/nero/"
 ```
+
+### `shared_docs` — Cross-cluster documentation
+
+```yaml
+shared_docs: "docs/srcc/"
+```
+
+Content in this directory is merged into every cluster's retriever at startup. Use for org-wide content (workshops, policies, people) that applies regardless of cluster.
+
+### `server` — Network settings
+
+| Key | Default | Description |
+|---|---|---|
+| `api_port` | `8000` | Port for the FastAPI server. |
+| `host` | `"ada-lovelace.stanford.edu"` | Hostname shown in startup messages and CORS. |
+
+### `logging` — Log output
+
+| Key | Default | Description |
+|---|---|---|
+| `log_dir` | `"logs"` | Directory for application logs. |
+| `stats_log` | `"/workspace/logs/stats.jsonl"` | Per-query stats (latency, cache hit/miss, errors) in JSONL format. |
+
+### `workers` — Deprecated
+
+Legacy multi-worker configuration. Ignored by `main.sh`. Retained for reference only.
 
 ### Environment variable overrides
 
@@ -381,70 +468,52 @@ APPTAINERENV_PYTHONPATH=/workspace   # required — activates sitecustomize.py s
 
 ---
 
-## Apptainer Compatibility Shims
-
-Two files work together to make vLLM 0.18.0 function correctly inside Apptainer on ada-lovelace. They are loaded automatically when `APPTAINERENV_PYTHONPATH=/workspace` is set (as `main.sh` does).
-
-### `sitecustomize.py`
-
-Python's site machinery loads this file at interpreter startup in every process, including vLLM's spawned `EngineCore` subprocess. It installs two shims:
-
-**Shim 1 — pynvml mock:** vLLM's CUDA platform detection calls `pynvml.nvmlInit()`. Inside Apptainer, NVML fails to initialize, causing vLLM to fall back to `UnspecifiedPlatform` and crash with `"Device string must not be empty"`. The shim injects mock `pynvml` and `vllm.third_party.pynvml` modules that return GPU info from `torch.cuda` instead.
-
-**Shim 2 — GPUWorker memory patch:** After AWQ→Marlin weight conversion during vLLM's profile pass, PyTorch's CUDA caching allocator retains freed tensors. `torch.cuda.mem_get_info()` counts the cache as "used", so vLLM calculates ~0.48 GiB available for KV cache on a 22.5 GiB L4 and crashes. The shim wraps `GPUWorker.determine_available_memory` to call `torch.cuda.empty_cache()` before measuring, releasing the cache to the driver.
-
-### `pynvml.py`
-
-A standalone version of the pynvml mock (same interface as Shim 1). Present as a fallback for processes that load `pynvml` directly before `sitecustomize.py` has run. Delegates all GPU queries to `torch.cuda`.
-
----
-
 ## File Structure
 
 ```
 apichatbot/
-├── main.sh                  # Start the API (production or dev mode)
-├── filemagic.sh             # Fetch and process all documentation
-├── setup_upgrade.sh         # Download model, rebuild container, tune BM25
-├── stop_multi_gpu.sh        # Stop worker/load-balancer processes
-├── comprehensive_test.sh    # Full integration test suite
-├── test_cache.sh            # Quick semantic cache smoke test
-├── gpu.sh                   # GPU compute diagnostic
-├── diagnose_gen.sh          # Generation pipeline diagnostic
-├── start_multi_gpu.sh       # DEPRECATED — exits with error
-├── bench_gemma.sh           # Legacy benchmark (Gemma 2, not vLLM)
-├── benchmark_llama.sh       # Legacy benchmark (TinyLlama, not vLLM)
-├── chatbot.def              # Apptainer container definition (API)
-├── chatbot.sif              # Built container (generated)
-├── file_processing.def      # Apptainer container definition (doc processing)
-├── file_processing.sif      # Built container (generated)
-├── config.yaml              # Central configuration — source of truth
-├── requirements.txt         # Python dependencies for chatbot container
-├── sitecustomize.py         # Apptainer/vLLM compatibility shims (auto-loaded)
-├── pynvml.py                # Standalone pynvml mock (fallback shim)
-├── file_magic.py            # Clone GitHub repos, flatten MkDocs docs to .md
-├── scrape_srcc.py           # Scrape srcc.stanford.edu → docs/srcc/
-├── scrape_static_docs.py    # Scrape Carina/Nero docs → docs/carina/, docs/nero/
-├── var_clean_up.py          # Markdown variable substitution utility
-├── app/
-│   ├── main.py              # FastAPI app and route definitions
-│   ├── rag_service.py       # Model loading, retrieval, generation, caching
-│   ├── config.py            # Settings — reads config.yaml + env vars
-│   ├── prompts.py           # System prompt and chat template logic
-│   ├── semantic_cache.py    # SQLite semantic response cache
-│   ├── load_balancer.py     # DEPRECATED — old multi-worker load balancer
-│   └── models.py            # Pydantic request/response models
-├── docs/                    # Generated documentation (output of filemagic.sh)
-│   ├── sherlock/
-│   ├── farmshare/
-│   ├── oak/
-│   ├── elm/
-│   ├── carina/
-│   ├── nero/
-│   ├── src/
-│   └── srcc/
-└── logs/
-    └── myapp.log
+|-- main.sh                  # Start the API (production or dev mode)
+|-- filemagic.sh             # Fetch and process all documentation
+|-- setup_upgrade.sh         # Download model, rebuild container, tune BM25
+|-- stop_multi_gpu.sh        # Stop worker/load-balancer processes
+|-- comprehensive_test.sh    # Full integration test suite
+|-- test_cache.sh            # Quick semantic cache smoke test
+|-- gpu.sh                   # GPU compute diagnostic
+|-- diagnose_gen.sh          # Generation pipeline diagnostic
+|-- generate_manifests.py    # Content hashes for cache invalidation
+|-- start_multi_gpu.sh       # DEPRECATED -- exits with error
+|-- bench_gemma.sh           # Legacy benchmark (Gemma 2, not vLLM)
+|-- benchmark_llama.sh       # Legacy benchmark (TinyLlama, not vLLM)
+|-- chatbot.def              # Apptainer container definition (API)
+|-- chatbot.sif              # Built container (generated)
+|-- file_processing.def      # Apptainer container definition (doc processing)
+|-- file_processing.sif      # Built container (generated)
+|-- config.yaml              # Central configuration -- source of truth
+|-- requirements.txt         # Python dependencies for chatbot container
+|-- sitecustomize.py         # Apptainer/vLLM compatibility shims (auto-loaded)
+|-- pynvml.py                # Standalone pynvml mock (fallback shim)
+|-- file_magic.py            # Clone GitHub repos, flatten MkDocs docs to .md
+|-- scrape_srcc.py           # Scrape srcc.stanford.edu -> docs/srcc/
+|-- scrape_static_docs.py    # Scrape Carina/Nero docs -> docs/carina/, docs/nero/
+|-- var_clean_up.py          # Markdown variable substitution utility
+|-- app/
+|   |-- main.py              # FastAPI app and route definitions
+|   |-- rag_service.py       # Model loading, retrieval, generation, caching
+|   |-- config.py            # Settings -- reads config.yaml + env vars
+|   |-- prompts.py           # System prompt and chat template logic
+|   |-- semantic_cache.py    # SQLite semantic response cache
+|   |-- load_balancer.py     # DEPRECATED -- old multi-worker load balancer
+|   +-- models.py            # Pydantic request/response models
+|-- docs/                    # Generated documentation (output of filemagic.sh)
+|   |-- sherlock/
+|   |-- farmshare/
+|   |-- oak/
+|   |-- elm/
+|   |-- carina/
+|   |-- nero/
+|   +-- srcc/
++-- logs/
+    +-- myapp.log
 ```
 
 ---
@@ -455,11 +524,35 @@ apichatbot/
 
 ```bash
 # Verify the path in config.yaml exists and has the right files
-ls /path/to/model/config.json
-python3 -c "import json; print(json.load(open('/path/to/model/config.json'))['model_type'])"
+ls /home/users/bcritt/apichatbot/models/Qwen3-32B-AWQ/config.json
+python3 -c "import json; print(json.load(open('/home/users/bcritt/apichatbot/models/Qwen3-32B-AWQ/config.json'))['model_type'])"
 ```
 
 vLLM detects the model architecture from `config.json`. If the path is wrong or missing, vLLM may fall back to a cached model (with a different architecture and dtype requirements). AWQ models require `dtype: "half"` in `config.yaml`.
+
+### Embedding model fails with `trust_remote_code` error
+
+The gte-large-en-v1.5 embedding model uses custom Alibaba-NLP code (`modeling.py`, `configuration.py`). These files must be present in the model directory, and `config.json` must reference them as local paths (not `Alibaba-NLP/new-impl--`).
+
+```bash
+# Verify custom code files exist
+ls /home/users/bcritt/apichatbot/models/gte-large-en-v1.5/*.py
+
+# Verify config.json uses local paths
+grep auto_map /home/users/bcritt/apichatbot/models/gte-large-en-v1.5/config.json
+# Should show "configuration.NewConfig", not "Alibaba-NLP/new-impl--configuration.NewConfig"
+```
+
+If the `.py` files are missing, download them from the `Alibaba-NLP/new-impl` repo:
+```bash
+huggingface-cli download Alibaba-NLP/new-impl --include "*.py" \
+  --local-dir /home/users/bcritt/apichatbot/models/gte-large-en-v1.5
+```
+
+If `config.json` still references the remote prefix:
+```bash
+sed -i 's|Alibaba-NLP/new-impl--||g' /home/users/bcritt/apichatbot/models/gte-large-en-v1.5/config.json
+```
 
 ### Startup hangs or crashes with "Device string must not be empty"
 
@@ -482,8 +575,10 @@ nvidia-smi
 
 ### Cache returning stale responses
 
+Content-aware invalidation runs automatically on restart after a scrape. To force a full flush:
+
 ```bash
-curl -X POST http://localhost:8000/cache/clear
+curl -X POST http://ada-lovelace.stanford.edu:8000/cache/clear
 ```
 
 ### Container won't build
@@ -502,12 +597,16 @@ vLLM runs with `enforce_eager=True`, which disables CUDA graph capture and `torc
 
 **Root cause:** Even with `sitecustomize.py` working around the NVML crash at startup, PyTorch's `CUDACachingAllocator` contains a separate hard C++ assertion on `nvmlInit_v2_()` at `CUDACachingAllocator.cpp:1124` that fires during CUDA graph warmup. This assertion cannot be patched from Python.
 
-**Impact:** ~5–15% higher per-token latency. Acceptable for a documentation chatbot.
+**Impact:** ~5--15% higher per-token latency. Acceptable for a documentation chatbot.
 
 **To restore CUDA graphs** (requires NVML to work natively inside the container):
 1. Verify: `apptainer exec --nv instance://chatapi python -c "import pynvml; pynvml.nvmlInit(); print('ok')"`
 2. If that fails, check that `--nv` is binding `libnvidia-ml.so` from the host and that its version matches the driver: `nvidia-smi` on the host vs. `ldconfig -p | grep nvidia-ml` inside the container
 3. Once NVML initializes cleanly (no warnings in logs), remove `enforce_eager=True` from `_load_model()` in `app/rag_service.py`
+
+### NCCL socket transport
+
+NCCL all-reduce between the two L4 GPUs uses TCP socket over loopback (`NCCL_P2P_DISABLE=1`, `NCCL_SHM_DISABLE=1`). P2P is blocked by IOMMU inside Apptainer; SHM has namespace collisions. This adds ~32 ms per forward pass and makes the initial warmup slow. See `_load_model()` in `app/rag_service.py` for details.
 
 ---
 

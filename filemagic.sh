@@ -32,3 +32,10 @@ apptainer exec \
     --pwd "$PWD" \
     $SIF_NAME \
     python3 scrape_static_docs.py
+
+# Generate content manifests for cache invalidation.
+# The RAG service compares these at startup to detect changed docs
+# and selectively evict stale semantic cache entries.
+echo ""
+echo "Generating content manifests..."
+python3 generate_manifests.py "$DOCS_DIR"

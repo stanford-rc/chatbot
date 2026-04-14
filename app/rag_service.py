@@ -1,9 +1,12 @@
+import hashlib
+import json
 import logging
 import os
 import re
 import time
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, List, Set, Tuple
 
 import frontmatter
 import numpy as np
@@ -172,6 +175,10 @@ class RAGService:
                 if self.settings.SEMANTIC_CACHE_CLEAR_ON_STARTUP:
                     self.semantic_cache.clear()
                     logger.info("Semantic cache cleared on startup (SEMANTIC_CACHE_CLEAR_ON_STARTUP=true)")
+                else:
+                    # Selective invalidation: evict only cache entries whose
+                    # source docs changed since the last scrape.
+                    self._invalidate_stale_cache_entries()
                 logger.info(f"✓ Semantic cache initialized (threshold: {self.settings.SEMANTIC_CACHE_THRESHOLD})")
             except Exception as e:
                 logger.error(f"Failed to initialize semantic cache: {e}")
@@ -179,6 +186,79 @@ class RAGService:
         else:
             logger.warning("Semantic cache disabled")
             self.semantic_cache = None
+
+    def _detect_changed_sources(self) -> Set[str]:
+        """Compare content manifests to find source files that changed.
+
+        Each docs directory may contain a .content_manifest.json written by the
+        scraper.  A separate .content_manifest.prev.json stores the manifest
+        from the previous startup.  Files whose hash differs (or was added/
+        removed) are returned as changed.
+        """
+        changed: Set[str] = set()
+
+        # Collect all doc directories (shared + per-cluster)
+        doc_dirs: List[Path] = []
+        if self.settings.SHARED_DOCS_PATH:
+            doc_dirs.append(Path(self.settings.SHARED_DOCS_PATH))
+        for _cluster, path in self.settings.CLUSTERS.items():
+            doc_dirs.append(Path(path))
+
+        for doc_dir in doc_dirs:
+            manifest_path = doc_dir / ".content_manifest.json"
+            prev_path = doc_dir / ".content_manifest.prev.json"
+
+            if not manifest_path.exists():
+                continue
+
+            # Load current manifest
+            try:
+                current = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Could not read manifest {manifest_path}: {e}")
+                continue
+
+            # Load previous manifest
+            previous: dict = {}
+            if prev_path.exists():
+                try:
+                    previous = json.loads(prev_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass  # treat as empty — all files are "new"
+
+            # Detect changes: new, modified, or deleted files
+            all_files = set(current.keys()) | set(previous.keys())
+            for filename in all_files:
+                if current.get(filename) != previous.get(filename):
+                    changed.add(filename)
+
+            # Rotate: current manifest becomes prev for next startup
+            try:
+                prev_path.write_text(
+                    json.dumps(current, indent=2), encoding="utf-8"
+                )
+            except OSError as e:
+                logger.warning(f"Could not write previous manifest {prev_path}: {e}")
+
+        return changed
+
+    def _invalidate_stale_cache_entries(self):
+        """Detect changed source docs and evict their cached answers."""
+        if not self.semantic_cache:
+            return
+
+        try:
+            changed = self._detect_changed_sources()
+            if changed:
+                count = self.semantic_cache.invalidate_by_sources(changed)
+                logger.info(
+                    f"Content-aware cache invalidation: {len(changed)} source(s) changed, "
+                    f"{count} cache entry/entries evicted"
+                )
+            else:
+                logger.info("Content-aware cache invalidation: no source changes detected")
+        except Exception as e:
+            logger.error(f"Cache invalidation failed (non-fatal): {e}")
 
     def _load_model(self):
         """Load the language model via vLLM with tensor parallelism across both GPUs."""
@@ -197,15 +277,20 @@ class RAGService:
         os.environ.setdefault('VLLM_WORKER_MULTIPROC_TIMEOUT', '600') # 10 min (s)
 
         # ── NCCL transport override ──────────────────────────────────────────
-        # L4 GPUs are PCIe-only (no NVLink).  Inside Apptainer, NCCL's P2P
-        # transport (PCIe peer-mem) is blocked by IOMMU / cgroup isolation.
-        # SHM (shared-memory) transport works if orphaned /dev/shm segments
-        # are cleaned up before startup (main.sh handles this).  SHM is ~10x
-        # faster than socket for all-reduce, significantly reducing startup
-        # warmup time.
-        os.environ['NCCL_P2P_DISABLE'] = '1'     # disable PCIe peer-mem (IOMMU)
-        os.environ.pop('NCCL_SHM_DISABLE', None)  # allow SHM transport
-        os.environ['NCCL_SOCKET_IFNAME'] = 'lo'  # fallback socket on loopback
+        # L4 GPUs are PCIe-only (no NVLink).  Inside Apptainer, NCCL's normal
+        # transport selection hangs:
+        #   1. P2P (PCIe peer-mem)  — blocked by IOMMU / cgroup inside container
+        #   2. SHM (shared-memory)  — also hangs when NCCL's shm region name
+        #                            collides with the container's mount namespace
+        # Disabling both forces NCCL to use pure TCP socket on the loopback
+        # interface.  Loopback bandwidth ≈ 10-20 GB/s; the TP all-reduce for
+        # Qwen 32B at seq_len=512 is ~5 MB/layer × 64 layers ≈ ~320 MB total
+        # → ~32 ms extra latency per forward pass.  Acceptable for a chatbot.
+        # Use direct assignment (not setdefault) so these always win over any
+        # stale env var inherited from the shell.
+        os.environ['NCCL_P2P_DISABLE'] = '1'     # disable PCIe peer-mem
+        os.environ['NCCL_SHM_DISABLE'] = '1'     # disable shared-mem transport
+        os.environ['NCCL_SOCKET_IFNAME'] = 'lo'  # force loopback socket
         os.environ['NCCL_DEBUG'] = 'WARN'        # surface NCCL errors in log
 
         self.model = LLM(
@@ -763,15 +848,23 @@ class RAGService:
             cache_hit=False,
         )
 
-        # Cache the response for future similar queries
+        # Cache the response for future similar queries.
+        # Track which source doc files contributed so stale entries can be
+        # selectively invalidated when the scraper detects content changes.
         if self.semantic_cache:
             try:
+                source_files = list({
+                    doc.metadata.get('source', '')
+                    for doc in retrieved_docs
+                    if doc.metadata.get('source')
+                })
                 self.semantic_cache.set(
                     request.query,
                     cluster,
-                    response.model_dump()
+                    response.model_dump(),
+                    source_files=source_files,
                 )
-                logger.info("Response cached")
+                logger.info(f"Response cached (source files: {source_files})")
             except Exception as e:
                 logger.error(f"Failed to cache response: {e}")
 
