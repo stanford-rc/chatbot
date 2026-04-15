@@ -15,7 +15,7 @@ import json
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple  # noqa: F401
 
 import numpy as np
 
@@ -33,6 +33,15 @@ class StatsTracker:
 
         self.queries_by_cluster: Dict[str, int] = defaultdict(int)
         self.queries_by_hour: Dict[str, int] = defaultdict(int)
+
+        # Feedback counters
+        self.feedback_up: int = 0
+        self.feedback_down: int = 0
+        self.feedback_tags: Dict[str, int] = defaultdict(int)
+        self.feedback_by_cluster: Dict[str, Dict[str, int]] = defaultdict(
+            lambda: {"up": 0, "down": 0}
+        )
+        self.cluster_corrections: Dict[str, int] = defaultdict(int)
 
         # Keep last 1000 latency samples for percentile calculation
         self._latencies: List[float] = []
@@ -96,6 +105,7 @@ class StatsTracker:
         latency_s: float,
         cache_hit: bool,
         error: bool = False,
+        query_id: Optional[str] = None,
     ) -> None:
         with self._lock:
             self.total_queries += 1
@@ -122,7 +132,9 @@ class StatsTracker:
             if self._log_path:
                 try:
                     record = {
+                        "type": "query",
                         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "query_id": query_id,
                         "cluster": cluster,
                         "query": query,
                         "latency_s": round(latency_s, 3),
@@ -136,6 +148,44 @@ class StatsTracker:
 
         # Semantic collapsing runs outside the main lock (embedding is slow)
         self._find_or_create_canonical(query)
+
+    def record_feedback(
+        self,
+        query_id: str,
+        cluster: str,
+        rating: int,                          # 1 or -1
+        tags: Optional[List[str]] = None,
+        cluster_correction: Optional[str] = None,
+        comment: Optional[str] = None,
+    ) -> None:
+        with self._lock:
+            if rating > 0:
+                self.feedback_up += 1
+                self.feedback_by_cluster[cluster]["up"] += 1
+            else:
+                self.feedback_down += 1
+                self.feedback_by_cluster[cluster]["down"] += 1
+                for tag in (tags or []):
+                    self.feedback_tags[tag] += 1
+                if cluster_correction:
+                    self.cluster_corrections[cluster_correction] += 1
+
+            if self._log_path:
+                try:
+                    record = {
+                        "type": "feedback",
+                        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "query_id": query_id,
+                        "cluster": cluster,
+                        "rating": rating,
+                        "tags": tags or [],
+                        "cluster_correction": cluster_correction,
+                        "comment": comment,
+                    }
+                    with open(self._log_path, 'a') as f:
+                        f.write(json.dumps(record) + '\n')
+                except Exception:
+                    pass
 
     # ── Reporting ──────────────────────────────────────────────────────────
 
@@ -170,6 +220,9 @@ class StatsTracker:
                 reverse=True,
             )[:10]
 
+            feedback_total = self.feedback_up + self.feedback_down
+            satisfaction = round(self.feedback_up / feedback_total, 3) if feedback_total > 0 else None
+
             return {
                 "uptime_seconds": round(uptime_s),
                 "since": self.start_time.strftime("%Y-%m-%d %H:%M UTC"),
@@ -190,6 +243,15 @@ class StatsTracker:
                 "queries_by_cluster": dict(self.queries_by_cluster),
                 "queries_by_hour": recent_hours,
                 "top_queries": top_queries,
+                "feedback": {
+                    "up": self.feedback_up,
+                    "down": self.feedback_down,
+                    "total": feedback_total,
+                    "satisfaction": satisfaction,
+                    "tags": dict(self.feedback_tags),
+                    "by_cluster": {k: dict(v) for k, v in self.feedback_by_cluster.items()},
+                    "cluster_corrections": dict(self.cluster_corrections),
+                },
             }
 
     def reset(self) -> None:

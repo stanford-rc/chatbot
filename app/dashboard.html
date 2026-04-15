@@ -186,6 +186,11 @@
       <div class="value" id="kpi-errors">—</div>
       <div class="sub" id="kpi-errrate">— error rate</div>
     </div>
+    <div class="card">
+      <div class="label">Satisfaction</div>
+      <div class="value" id="kpi-satisfaction">—</div>
+      <div class="sub" id="kpi-feedback-counts">— ratings</div>
+    </div>
   </div>
 
   <!-- Charts -->
@@ -223,6 +228,32 @@
         <tr><td colspan="3" style="color:#aaa;text-align:center">Loading…</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- Feedback breakdown -->
+  <div id="feedback-section" style="display:none">
+    <div class="charts" style="grid-template-columns:1fr 1fr; margin-bottom:28px">
+      <div class="chart-box">
+        <h2>Downvote Reasons</h2>
+        <canvas id="chart-tags"></canvas>
+      </div>
+      <div class="chart-box">
+        <h2>Satisfaction by Cluster</h2>
+        <canvas id="chart-satisfaction-cluster"></canvas>
+      </div>
+    </div>
+    <div class="table-box" id="corrections-box" style="display:none">
+      <h2>Cluster Correction Requests</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Suggested Cluster</th>
+            <th style="text-align:right">Count</th>
+          </tr>
+        </thead>
+        <tbody id="corrections-body"></tbody>
+      </table>
+    </div>
   </div>
 </main>
 
@@ -380,6 +411,100 @@
     const errRate = data.total_queries > 0 ? data.errors / data.total_queries : 0;
     document.getElementById('kpi-errors').textContent  = data.errors;
     document.getElementById('kpi-errrate').textContent = pct(errRate) + ' error rate';
+
+    const fb = data.feedback;
+    if (fb && fb.total > 0) {
+      document.getElementById('kpi-satisfaction').textContent =
+        fb.satisfaction !== null ? pct(fb.satisfaction) : '—';
+      document.getElementById('kpi-feedback-counts').textContent =
+        `👍 ${fb.up}  👎 ${fb.down}`;
+    } else {
+      document.getElementById('kpi-satisfaction').textContent = '—';
+      document.getElementById('kpi-feedback-counts').textContent = 'no ratings yet';
+    }
+  }
+
+  function makeFeedbackCharts(data) {
+    const fb = data.feedback;
+    if (!fb || fb.total === 0) {
+      document.getElementById('feedback-section').style.display = 'none';
+      return;
+    }
+    document.getElementById('feedback-section').style.display = 'block';
+
+    // Downvote tags bar chart
+    destroyChart('tags');
+    const tagLabels = Object.keys(fb.tags);
+    const tagValues = Object.values(fb.tags);
+    if (tagLabels.length > 0) {
+      charts['tags'] = new Chart(document.getElementById('chart-tags'), {
+        type: 'bar',
+        data: {
+          labels: tagLabels,
+          datasets: [{
+            label: 'Downvotes',
+            data: tagValues,
+            backgroundColor: CARDINAL_L,
+            borderColor: CARDINAL,
+            borderWidth: 1.5,
+            borderRadius: 3,
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          plugins: { legend: { display: false } },
+          scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+      });
+    }
+
+    // Satisfaction by cluster horizontal bar
+    destroyChart('sat-cluster');
+    const clusterKeys = Object.keys(fb.by_cluster);
+    const satValues = clusterKeys.map(k => {
+      const c = fb.by_cluster[k];
+      const t = c.up + c.down;
+      return t > 0 ? Math.round((c.up / t) * 100) : null;
+    });
+    if (clusterKeys.length > 0) {
+      charts['sat-cluster'] = new Chart(document.getElementById('chart-satisfaction-cluster'), {
+        type: 'bar',
+        data: {
+          labels: clusterKeys,
+          datasets: [{
+            label: '% positive',
+            data: satValues,
+            backgroundColor: PALO_L,
+            borderColor: PALO_ALTO,
+            borderWidth: 1.5,
+            borderRadius: 3,
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { beginAtZero: true, max: 100,
+                 title: { display: true, text: '% thumbs up' } }
+          }
+        }
+      });
+    }
+
+    // Cluster corrections table
+    const corrections = fb.cluster_corrections;
+    const corrBox = document.getElementById('corrections-box');
+    if (Object.keys(corrections).length > 0) {
+      corrBox.style.display = 'block';
+      document.getElementById('corrections-body').innerHTML =
+        Object.entries(corrections)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `<tr><td>${k}</td><td style="text-align:right">
+            <span class="count-badge">${v}</span></td></tr>`)
+          .join('');
+    } else {
+      corrBox.style.display = 'none';
+    }
   }
 
   async function refresh() {
@@ -398,6 +523,7 @@
       makeCluster(data);
       makeLatency(data);
       makeTopQueries(data);
+      makeFeedbackCharts(data);
     } catch (err) {
       const el = document.getElementById('error-msg');
       el.style.display = 'block';

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -794,11 +795,16 @@ class RAGService:
         if cluster not in self.retrievers:
             cluster_list_str = ", ".join(self.retrievers.keys())
             return QueryResponse(
+                query_id=str(uuid.uuid4()),
                 answer=f"Unknown cluster '{cluster}'. Available: {cluster_list_str}.",
                 cluster="unknown",
                 sources=[]
             )
-        
+
+        # Every query invocation gets a fresh UUID — passed back to the client
+        # so they can submit /feedback referencing this specific response.
+        query_id = str(uuid.uuid4())
+
         # Check semantic cache first
         t_start = time.monotonic()
         if self.semantic_cache:
@@ -810,7 +816,10 @@ class RAGService:
                     query=request.query,
                     latency_s=time.monotonic() - t_start,
                     cache_hit=True,
+                    query_id=query_id,
                 )
+                # Override query_id so the client gets a fresh feedbackable ID
+                cached_response["query_id"] = query_id
                 return QueryResponse(**cached_response)
 
         logger.info(f"Processing query for cluster '{cluster}': '{request.query[:100]}...'")
@@ -829,6 +838,7 @@ class RAGService:
                 latency_s=time.monotonic() - t_start,
                 cache_hit=False,
                 error=True,
+                query_id=query_id,
             )
             raise HTTPException(status_code=500, detail="Failed to generate a response from the model.")
 
@@ -836,6 +846,7 @@ class RAGService:
         final_answer, source_objects = self._process_llm_answer(llm_answer, retrieved_docs)
 
         response = QueryResponse(
+            query_id=query_id,
             answer=final_answer,
             cluster=cluster,
             sources=source_objects
@@ -846,6 +857,7 @@ class RAGService:
             query=request.query,
             latency_s=time.monotonic() - t_start,
             cache_hit=False,
+            query_id=query_id,
         )
 
         # Cache the response for future similar queries.

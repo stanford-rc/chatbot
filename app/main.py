@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissi
 from fastapi.responses import HTMLResponse
 
 from app.config import settings
-from app.models import QueryRequest, QueryResponse
+from app.models import QueryRequest, QueryResponse, FeedbackRequest, FeedbackResponse, FEEDBACK_TAGS
 from app.rag_service import RAGService
 from app.stats import stats_tracker
 
@@ -120,6 +120,42 @@ async def clear_cache():
     except Exception as e:
         logger.error(f"Failed to clear semantic cache: {e}")
         raise HTTPException(status_code=500, detail=f"Cache clear failed: {e}")
+
+
+@app.post("/feedback", response_model=FeedbackResponse, summary="Submit answer feedback")
+async def submit_feedback(fb: FeedbackRequest):
+    """
+    Rate a query response.
+
+    - **query_id**: from the QueryResponse.query_id field
+    - **rating**: 1 (thumbs up) or -1 (thumbs down)
+    - **tags**: optional list of downvote reasons — wrong_answer, incomplete, outdated, wrong_cluster
+    - **cluster_correction**: if wrong_cluster, the correct cluster name
+    - **comment**: optional free-text
+    """
+    if fb.rating not in (1, -1):
+        raise HTTPException(status_code=422, detail="rating must be 1 or -1")
+
+    invalid_tags = [t for t in (fb.tags or []) if t not in FEEDBACK_TAGS]
+    if invalid_tags:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown tags: {invalid_tags}. Valid: {sorted(FEEDBACK_TAGS)}"
+        )
+
+    # cluster defaults to "unknown" if we can't determine it from query_id
+    cluster = fb.cluster_correction or "unknown"
+
+    stats_tracker.record_feedback(
+        query_id=fb.query_id,
+        cluster=cluster,
+        rating=fb.rating,
+        tags=fb.tags,
+        cluster_correction=fb.cluster_correction,
+        comment=fb.comment,
+    )
+    logger.info(f"Feedback recorded: query_id={fb.query_id} rating={fb.rating} tags={fb.tags}")
+    return FeedbackResponse(received=True, query_id=fb.query_id)
 
 
 @app.get("/dashboard", response_class=HTMLResponse, summary="Usage dashboard", include_in_schema=False)
