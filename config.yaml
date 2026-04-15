@@ -112,6 +112,26 @@ clusters:
 # Content here (e.g. SRCC web pages) will be searchable for all cluster queries.
 shared_docs: "docs/srcc/"
 
+# GitHub authentication for private repo cloning.
+# token_file: path to a file containing only the token (no newline required).
+# Never put the token value directly in this file.
+github:
+  token_file: "/etc/ada-chatbot/secrets/github_token"
+
+# Runtime data directory — writable location for cache DBs, logs, and HF cache.
+# In development: leave empty — the app directory is used.
+# In production: set to a writable path outside /etc (e.g. /var/ada-chatbot).
+# All /workspace-prefixed paths in caching/logging/hf_home are relative to this
+# directory when set.
+data_dir: ""
+
+# Container paths — set to absolute paths for production deployments.
+# sif_path: the built Apptainer container image.
+# file_processing_sif: container used by filemagic.sh for doc ingestion.
+container:
+  sif_path: "chatbot.sif"
+  file_processing_sif: "file_processing.sif"
+
 # Server Settings
 server:
   api_port: 8000
@@ -121,6 +141,10 @@ server:
 logging:
   log_dir: "logs"
   stats_log: "/workspace/logs/stats.jsonl"
+
+# HuggingFace cache — must be inside a writable bind-mounted directory.
+# /workspace maps to $PWD on the host; .hf_cache is created automatically.
+hf_home: "/workspace/.hf_cache"
 
 # Worker Configuration (multi-GPU mode)
 workers:

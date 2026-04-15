@@ -37,7 +37,9 @@
       "Bash(sort -t: -k2 -n)",
       "Bash(wc -c /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/sherlock/*.md)",
       "Bash(head -30 /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/farmshare/*.md)",
-      "Bash(head -30 /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/oak/*.md)"
+      "Bash(head -30 /Users/bcritt/Documents/StanfordProjects/claude/chatbot/docs/oak/*.md)",
+      "Bash(python3 -c ':*)",
+      "Bash(bash -n main.sh)"
     ]
   }
 }

@@ -273,10 +273,32 @@ Content in this directory is merged into every cluster's retriever at startup. U
 | `log_dir` | `"logs"` | Directory for application logs. |
 | `stats_log` | `"/workspace/logs/stats.jsonl"` | Per-query stats (latency, cache hit/miss, errors) in JSONL format. |
 
+### `data_dir` — Runtime data root
+
+```yaml
+data_dir: "/var/lib/ada-chatbot"
+```
+
+Optional. When set, any path in the config that starts with `/workspace/` is remapped to this directory at runtime. Leave empty (or omit) to use the app directory. Use this to separate application code from runtime data (caches, logs, docs) when deploying to a read-only or shared location.
+
+### `container` — Apptainer image paths
+
+| Key | Description |
+|---|---|
+| `sif_path` | Path to the main API container image (`chatbot.sif`). Defaults to `chatbot.sif` in the app directory. |
+| `file_processing_sif` | Path to the file-processing container image (`file_processing.sif`). |
+
+### `github` — Source credential
+
+| Key | Description |
+|---|---|
+| `token_file` | Path to a file containing a GitHub personal access token (no newline). Token is exported as `GITHUB_TOKEN` before `file_magic.py` runs. Required for private repos; omit for public-only. |
+
 ### Environment variable overrides
 
 | Variable | Overrides | Description |
 |---|---|---|
+| `ADA_CONFIG` | -- | Absolute path to `config.yaml`. Takes precedence over the default search path. Use this when deploying config to a system location (e.g. `/etc/ada-chatbot/config.yaml`). |
 | `MODEL_PATH` | `model.path` | Path to the LLM model directory |
 | `API_PORT` | `server.api_port` | Port for the API |
 | `API_HOST` | `server.host` | Hostname |
@@ -289,13 +311,89 @@ APPTAINERENV_PYTHONPATH=/workspace   # required — activates sitecustomize.py s
 
 ---
 
+## Systemd Integration
+
+For production deployments, use the provided unit files in `systemd/` to manage the service and automate daily document scraping.
+
+### Install
+
+```bash
+sudo cp systemd/ada-chatbot.service /etc/systemd/system/
+sudo cp systemd/ada-chatbot-scrape.service /etc/systemd/system/
+sudo cp systemd/ada-chatbot-scrape.timer /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now ada-chatbot.service
+sudo systemctl enable --now ada-chatbot-scrape.timer
+```
+
+### Units
+
+| Unit | Type | Description |
+|------|------|-------------|
+| `ada-chatbot.service` | `simple` | Main API service. Starts `main.sh`, restarts on failure. |
+| `ada-chatbot-scrape.service` | `oneshot` | Runs `filemagic.sh` (scrape + manifest generation). |
+| `ada-chatbot-scrape.timer` | timer | Triggers `ada-chatbot-scrape.service` daily at 02:00. |
+
+### Useful commands
+
+```bash
+# API service
+sudo systemctl status ada-chatbot
+sudo journalctl -u ada-chatbot -f
+
+# Scrape
+sudo systemctl start ada-chatbot-scrape   # run immediately
+sudo journalctl -u ada-chatbot-scrape -f
+
+# Timer
+systemctl list-timers ada-chatbot-scrape
+```
+
+### GitHub token
+
+If your documentation repos are private, store a fine-grained PAT in a secrets file:
+
+```bash
+sudo mkdir -p /etc/ada-chatbot/secrets
+echo -n "github_pat_..." | sudo tee /etc/ada-chatbot/secrets/github_token
+sudo chmod 600 /etc/ada-chatbot/secrets/github_token
+```
+
+Then reference it in `config.yaml`:
+```yaml
+github:
+  token_file: "/etc/ada-chatbot/secrets/github_token"
+```
+
+The token is only used during `filemagic.sh` (cloning) and is never logged or stored elsewhere.
+
+---
+
 ## Adapting for a New Deployment
 
 1. **Edit `config.yaml`**: Set `model.path` to your local model directory, `server.host` to your hostname, and update `clusters` to point to your documentation directories.
-2. **Download the embedding model**: `huggingface-cli download Alibaba-NLP/gte-large-en-v1.5 --local-dir /path/to/models/gte-large-en-v1.5`. Then download custom code: `huggingface-cli download Alibaba-NLP/new-impl --include "*.py" --local-dir /path/to/models/gte-large-en-v1.5` and run `sed -i 's|Alibaba-NLP/new-impl--||g' /path/to/models/gte-large-en-v1.5/config.json`.
-3. **Download the LLM**: `./setup_upgrade.sh download` or manually via `huggingface-cli`.
-4. **Update scrapers**: Modify `scrape_srcc.py` / `scrape_static_docs.py` for your documentation sites, or remove them and populate `docs/` manually.
-5. **Build and run**: `./setup_upgrade.sh rebuild && ./filemagic.sh && ./main.sh`
+
+2. **Set config location** (production): If deploying config to a system path, set `ADA_CONFIG` in the systemd unit or your environment:
+   ```
+   Environment=ADA_CONFIG=/etc/mybot/config.yaml
+   ```
+   The app and shell scripts both respect this variable; all relative paths in the config resolve from the config file's directory.
+
+3. **Separate data from code** (optional): Set `data_dir` in `config.yaml` to a writable directory for caches, logs, and docs. Paths starting with `/workspace/` are remapped there automatically:
+   ```yaml
+   data_dir: "/var/lib/mybot"
+   ```
+
+4. **Download the embedding model**: `huggingface-cli download Alibaba-NLP/gte-large-en-v1.5 --local-dir /path/to/models/gte-large-en-v1.5`. Then download custom code: `huggingface-cli download Alibaba-NLP/new-impl --include "*.py" --local-dir /path/to/models/gte-large-en-v1.5` and run `sed -i 's|Alibaba-NLP/new-impl--||g' /path/to/models/gte-large-en-v1.5/config.json`.
+
+5. **Download the LLM**: `./setup_upgrade.sh download` or manually via `huggingface-cli`.
+
+6. **Update scrapers**: Modify `scrape_srcc.py` / `scrape_static_docs.py` for your documentation sites, or remove them and populate `docs/` manually.
+
+7. **Build and run**: `./setup_upgrade.sh rebuild && ./filemagic.sh && ./main.sh`
+
+8. **Automate scraping** (optional): Install the systemd units from `systemd/`. See the Systemd Integration section above.
 
 ---
 

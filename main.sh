@@ -16,9 +16,26 @@
 
 set -e
 
-SIF_NAME="chatbot.sif"
-SIF_DEF="chatbot.def"
-DATABASE_FILE=".langchain.db"
+# ── Locate the app and its config ─────────────────────────────────────────
+# APP_DIR is the directory containing this script — works regardless of CWD.
+APP_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+# ADA_CONFIG: path to config.yaml.  Override to use a system-level config
+# (e.g. /etc/ada-chatbot/config.yaml) without changing the app directory.
+# Defaults to config.yaml alongside this script.
+export ADA_CONFIG="${ADA_CONFIG:-$APP_DIR/config.yaml}"
+
+if [[ ! -f "$ADA_CONFIG" ]]; then
+    echo "❌ ERROR: config file not found: $ADA_CONFIG"
+    echo "   Set ADA_CONFIG=/path/to/config.yaml to specify its location."
+    exit 1
+fi
+
+echo "Config  : $ADA_CONFIG"
+echo "App dir : $APP_DIR"
+
+SIF_DEF="$APP_DIR/chatbot.def"
+DATABASE_FILE="$APP_DIR/.langchain.db"
 MODE=${1:-single}
 
 # ── 'multi' mode is incompatible with TP=2 ────────────────────────────────
@@ -39,13 +56,17 @@ if [[ "$MODE" == "multi" ]]; then
     exit 1
 fi
 
-# ── Read settings from config.yaml ────────────────────────────────────────
-MODEL_PATH=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c['model']['path'])")
-PORT=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('api_port',8000))")
-HOST=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('server',{}).get('host','localhost'))")
-LOG_DIR=$(python3 -c "import yaml; c=yaml.safe_load(open('config.yaml')); print(c.get('logging',{}).get('log_dir','logs'))")
+# ── Read settings from config ─────────────────────────────────────────────
+_cfg() { python3 -c "import yaml; c=yaml.safe_load(open('$ADA_CONFIG')); print($1)"; }
 
-echo "Using model from config.yaml: $MODEL_PATH"
+MODEL_PATH=$(_cfg "c['model']['path']")
+PORT=$(_cfg "c.get('server',{}).get('api_port',8000)")
+HOST=$(_cfg "c.get('server',{}).get('host','localhost')")
+LOG_DIR=$(_cfg "c.get('logging',{}).get('log_dir','$APP_DIR/logs')")
+HF_HOME=$(_cfg "c.get('hf_home','/workspace/.hf_cache')")
+SIF_NAME=$(_cfg "c.get('container',{}).get('sif_path','$APP_DIR/chatbot.sif')")
+
+echo "Using model: $MODEL_PATH"
 echo "API port: $PORT, host: $HOST, log dir: $LOG_DIR"
 
 # ── Housekeeping ──────────────────────────────────────────────────────────
@@ -83,7 +104,7 @@ if [ -d "$MODEL_PATH" ]; then
     fi
 else
     echo "❌ ERROR: Model path does not exist: $MODEL_PATH"
-    echo "Please check config.yaml and ensure the model path is correct"
+    echo "Please check $ADA_CONFIG and ensure the model path is correct"
     exit 1
 fi
 
@@ -94,13 +115,83 @@ if [ ! -f "$SIF_NAME" ]; then
 fi
 
 # ── Prepare bind mounts ───────────────────────────────────────────────────
-# $PWD → /workspace  (code, docs, DB files, sitecustomize.py)
-BIND_MOUNTS="--bind $PWD:/workspace"
-# Bind the parent models directory so all models (LLM + embedding) are accessible
-MODEL_DIR="$(dirname "$MODEL_PATH")"
-if [ -d "$MODEL_DIR" ]; then
-    BIND_MOUNTS="$BIND_MOUNTS --bind $MODEL_DIR:$MODEL_DIR"
+# APP_DIR always maps to /workspace (code + sitecustomize.py).
+# Additional mounts are auto-generated from every absolute path in config:
+#   model dir, doc dirs, data_dir (cache DBs, logs, HF cache), config dir.
+# This ensures the container can see all referenced paths regardless of
+# where they live on the host filesystem.
+BIND_MOUNTS=$(python3 - "$APP_DIR" "$ADA_CONFIG" <<'PYEOF'
+import sys, os, yaml
+
+app_dir   = sys.argv[1]
+cfg_path  = sys.argv[2]
+
+with open(cfg_path) as f:
+    c = yaml.safe_load(f)
+
+dirs = set()
+
+def add(path):
+    """Add the directory (or the path itself if it's a dir) to the bind set."""
+    if not path:
+        return
+    path = str(path)
+    # Resolve relative paths from config file location
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(os.path.abspath(cfg_path)), path)
+    # Use parent dir for file paths
+    d = path if os.path.isdir(path) or not os.path.splitext(path)[1] else os.path.dirname(path)
+    if d and d != '/':
+        dirs.add(d)
+
+# Model
+add(c['model']['path'])
+
+# Docs
+for p in c.get('clusters', {}).values():
+    add(p)
+add(c.get('shared_docs', ''))
+
+# Caching DBs
+add(c.get('caching', {}).get('SEMANTIC_CACHE_DB', ''))
+add(c.get('caching', {}).get('LANGCHAIN_CACHE_DB', ''))
+
+# Logs
+add(c.get('logging', {}).get('log_dir', ''))
+add(c.get('logging', {}).get('stats_log', ''))
+
+# HF cache
+add(c.get('hf_home', ''))
+
+# Explicit data_dir
+add(c.get('data_dir', ''))
+
+# Config file dir (if outside app_dir)
+add(os.path.dirname(os.path.abspath(cfg_path)))
+
+# Build args: APP_DIR → /workspace, everything else maps to itself
+parts = [f'--bind {app_dir}:/workspace']
+for d in sorted(dirs):
+    if os.path.commonpath([d, app_dir]) == app_dir:
+        continue  # inside app_dir, already covered by /workspace mount
+    parts.append(f'--bind {d}:{d}')
+
+print(' '.join(parts))
+PYEOF
+)
+
+# ── Resolve ADA_CONFIG path as seen inside the container ─────────────────
+# The config file's directory is already in BIND_MOUNTS (either covered by
+# the APP_DIR→/workspace mount or bound as itself).  Translate the host path
+# to the equivalent in-container path so the app can find it.
+if [[ "$ADA_CONFIG" == "$APP_DIR"/* ]]; then
+    # Config lives inside the app dir — it appears under /workspace inside the container
+    CONTAINER_ADA_CONFIG="/workspace/${ADA_CONFIG#"$APP_DIR/"}"
+else
+    # Config is outside the app dir — bound as itself, path unchanged
+    CONTAINER_ADA_CONFIG="$ADA_CONFIG"
 fi
+echo "Container config path: $CONTAINER_ADA_CONFIG"
 
 echo "Bind mounts: $BIND_MOUNTS"
 
@@ -135,6 +226,8 @@ if [[ "$MODE" == "dev" ]]; then
     echo "API docs  : http://$HOST:$PORT/docs"
     echo ""
     APPTAINERENV_PYTHONPATH=/workspace \
+    APPTAINERENV_HF_HOME="$HF_HOME" \
+    APPTAINERENV_ADA_CONFIG="$CONTAINER_ADA_CONFIG" \
     apptainer exec --nv instance://chatapi \
         /opt/chatbot-env/bin/python -m uvicorn app.main:app \
         --host 0.0.0.0 \
@@ -150,6 +243,8 @@ else
     echo "API docs  : http://$HOST:$PORT/docs"
     echo ""
     APPTAINERENV_PYTHONPATH=/workspace \
+    APPTAINERENV_HF_HOME="$HF_HOME" \
+    APPTAINERENV_ADA_CONFIG="$CONTAINER_ADA_CONFIG" \
     apptainer exec --nv instance://chatapi \
         /opt/chatbot-env/bin/python -m uvicorn app.main:app \
         --host 0.0.0.0 \

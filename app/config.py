@@ -7,13 +7,65 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def _find_config() -> str:
+    """Locate config.yaml.
+
+    Resolution order:
+      1. ADA_CONFIG env var (explicit path, e.g. /etc/ada-chatbot/config.yaml)
+      2. config.yaml alongside the app package (development default)
+    """
+    explicit = os.environ.get('ADA_CONFIG')
+    if explicit:
+        if not os.path.isfile(explicit):
+            raise FileNotFoundError(f"ADA_CONFIG points to missing file: {explicit}")
+        return explicit
+    fallback = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+    if not os.path.isfile(fallback):
+        raise FileNotFoundError(
+            f"config.yaml not found at {fallback}. "
+            "Set ADA_CONFIG=/path/to/config.yaml to specify its location."
+        )
+    return fallback
+
+
 def load_config():
-    """Load configuration from config.yaml"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+    """Load configuration from config.yaml (location resolved by _find_config)."""
+    config_path = _find_config()
     with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    # Stash the resolved config path so other modules can resolve relative paths
+    data['_config_path'] = config_path
+    return data
 
 config = load_config()
+
+# Base directory for resolving relative paths in config.yaml.
+# Relative doc/log paths are resolved from here so the app works
+# regardless of the CWD it's invoked from.
+_CONFIG_DIR = os.path.dirname(os.path.abspath(config['_config_path']))
+
+# Runtime data directory — writable location for cache, logs, HF cache.
+# Empty means use the config file's directory (development default).
+_DATA_DIR = config.get('data_dir', '') or _CONFIG_DIR
+
+
+def _resolve(path: str) -> str:
+    """Resolve a config path to an absolute path.
+
+    Resolution order:
+      - Already absolute: returned as-is.
+      - Starts with /workspace/: remapped to DATA_DIR (so production configs
+        written with /workspace/ prefixes work when data_dir is set).
+      - Relative: resolved from the config file's directory.
+    """
+    if not path:
+        return path
+    if path.startswith('/workspace/'):
+        return os.path.join(_DATA_DIR, path[len('/workspace/'):])
+    if path == '/workspace':
+        return _DATA_DIR
+    return path if os.path.isabs(path) else os.path.join(_CONFIG_DIR, path)
+
 
 class Settings(BaseSettings):
     """Application settings loaded from config.yaml and environment variables"""
@@ -34,12 +86,12 @@ class Settings(BaseSettings):
     # Generation settings
     MAX_NEW_TOKENS: int = config['generation']['max_new_tokens']
     
-    # Cluster paths
-    CLUSTERS: Dict[str, str] = config['clusters']
+    # Cluster paths — relative paths resolved from the config file's directory
+    CLUSTERS: Dict[str, str] = {k: _resolve(v) for k, v in config['clusters'].items()}
 
     # Shared docs path — merged into every cluster's retriever at startup.
     # Set to '' to disable.
-    SHARED_DOCS_PATH: str = config.get('shared_docs', '')
+    SHARED_DOCS_PATH: str = _resolve(config.get('shared_docs', ''))
     
     # API settings
     CORS_ORIGINS: List[str] = config['api']['cors_origins']
@@ -47,9 +99,9 @@ class Settings(BaseSettings):
     # Caching settings
     SEMANTIC_CACHE_ENABLED: bool = config.get('caching', {}).get('SEMANTIC_CACHE_ENABLED', True)
     SEMANTIC_CACHE_THRESHOLD: float = config.get('caching', {}).get('SEMANTIC_CACHE_THRESHOLD', 0.70)
-    SEMANTIC_CACHE_DB: str = config.get('caching', {}).get('SEMANTIC_CACHE_DB', '.response_cache.db')
+    SEMANTIC_CACHE_DB: str = _resolve(config.get('caching', {}).get('SEMANTIC_CACHE_DB', '.response_cache.db'))
     SEMANTIC_CACHE_CLEAR_ON_STARTUP: bool = config.get('caching', {}).get('SEMANTIC_CACHE_CLEAR_ON_STARTUP', False)
-    LANGCHAIN_CACHE_DB: str = config.get('caching', {}).get('LANGCHAIN_CACHE_DB', '.langchain.db')
+    LANGCHAIN_CACHE_DB: str = _resolve(config.get('caching', {}).get('LANGCHAIN_CACHE_DB', '.langchain.db'))
     
     # Retrieval settings
     MAX_RETRIEVED_DOCS: int = config.get('retrieval', {}).get('MAX_RETRIEVED_DOCS', 5)
@@ -72,8 +124,11 @@ class Settings(BaseSettings):
     API_HOST: str = Field(default=config.get('server', {}).get('host', 'localhost'), env="API_HOST")
 
     # Logging settings
-    LOG_DIR: str = Field(default=config.get('logging', {}).get('log_dir', 'logs'), env="LOG_DIR")
-    STATS_LOG: str = config.get('logging', {}).get('stats_log', '')
+    LOG_DIR: str = Field(default=_resolve(config.get('logging', {}).get('log_dir', 'logs')), env="LOG_DIR")
+    STATS_LOG: str = _resolve(config.get('logging', {}).get('stats_log', ''))
+
+    # HuggingFace cache directory — must be writable inside the container.
+    HF_HOME: str = _resolve(config.get('hf_home', '/workspace/.hf_cache'))
 
     # Worker configuration (multi-GPU mode)
     WORKERS: list = config.get('workers', [

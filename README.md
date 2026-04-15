@@ -314,6 +314,70 @@ Called automatically at the end of `filemagic.sh`.
 
 ---
 
+## Systemd Integration
+
+Three unit files live in `systemd/`. Install them for automatic startup and scheduled doc scraping.
+
+### Install
+
+```bash
+# Copy units to systemd
+sudo cp systemd/ada-chatbot.service       /etc/systemd/system/
+sudo cp systemd/ada-chatbot-scrape.service /etc/systemd/system/
+sudo cp systemd/ada-chatbot-scrape.timer  /etc/systemd/system/
+
+# Reload and enable
+sudo systemctl daemon-reload
+sudo systemctl enable --now ada-chatbot.service
+sudo systemctl enable --now ada-chatbot-scrape.timer
+```
+
+### Units
+
+| Unit | Type | Purpose |
+|------|------|---------|
+| `ada-chatbot.service` | Service | Starts the API at boot; restarts on crash |
+| `ada-chatbot-scrape.service` | Service (oneshot) | Runs the full scrape + manifest pipeline |
+| `ada-chatbot-scrape.timer` | Timer | Triggers the scrape daily at 02:00 |
+
+### Useful commands
+
+```bash
+# Service status
+systemctl status ada-chatbot.service
+
+# View API logs
+journalctl -u ada-chatbot.service -f
+
+# View last scrape run
+journalctl -u ada-chatbot-scrape.service --no-pager
+
+# Run scrape manually (same as ./filemagic.sh but via systemd)
+sudo systemctl start ada-chatbot-scrape.service
+
+# Check when scrape next fires
+systemctl list-timers ada-chatbot-scrape.timer
+```
+
+### GitHub token setup
+
+Private repo access uses a service token stored outside the codebase:
+
+```bash
+# Create the secrets directory
+sudo mkdir -p /etc/ada-chatbot/secrets
+sudo chmod 700 /etc/ada-chatbot/secrets
+
+# Write the token (fine-grained PAT for ada-chatbot machine user)
+echo -n "github_pat_..." | sudo tee /etc/ada-chatbot/secrets/github_token
+sudo chmod 600 /etc/ada-chatbot/secrets/github_token
+sudo chown bcritt:bcritt /etc/ada-chatbot/secrets/github_token
+```
+
+`config.yaml` references the file path; the token value is never committed to git.
+
+---
+
 ## Monitoring
 
 ### Dashboard

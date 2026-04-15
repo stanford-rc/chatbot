@@ -1,0 +1,17 @@
+[Unit]
+Description=Ada chatbot — daily documentation scrape
+Documentation=https://ada-lovelace.stanford.edu:8000/docs
+
+[Timer]
+# Run daily at 02:00 local time (low-traffic window, before business hours)
+OnCalendar=*-*-* 02:00:00
+
+# If the system was down at the scheduled time, run once it comes back up
+Persistent=true
+
+# Spread runs randomly up to 10 minutes to avoid hammering external sites
+# if multiple instances ever run on the same schedule
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

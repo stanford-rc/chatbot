@@ -1,0 +1,30 @@
+[Unit]
+Description=Ada chatbot — RAG API service
+Documentation=https://ada-lovelace.stanford.edu:8000/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bcritt
+Group=bcritt
+
+Environment=ADA_CONFIG=/etc/ada-chatbot/config.yaml
+
+WorkingDirectory=/srv/scratch/bcritt/chatbot
+
+ExecStart=/srv/scratch/bcritt/chatbot/main.sh
+ExecStop=/usr/bin/apptainer instance stop chatapi
+
+# Restart automatically if it crashes, but not if it exits cleanly
+Restart=on-failure
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+
+# Model loading takes several minutes — give it time before systemd gives up
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

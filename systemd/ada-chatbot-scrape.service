@@ -1,0 +1,31 @@
+[Unit]
+Description=Ada chatbot — scrape and process documentation
+Documentation=https://ada-lovelace.stanford.edu:8000/docs
+# Don't run if the network isn't up (scraper fetches from srcc.stanford.edu etc.)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Run as the service account, not root
+User=bcritt
+Group=bcritt
+
+# Config path — override here for production layout
+Environment=ADA_CONFIG=/etc/ada-chatbot/config.yaml
+
+# Working directory: the app code location
+WorkingDirectory=/srv/scratch/bcritt/chatbot
+
+# The scrape + manifest generation pipeline
+ExecStart=/srv/scratch/bcritt/chatbot/filemagic.sh
+
+# Log stdout/stderr to the journal (view with: journalctl -u ada-chatbot-scrape)
+StandardOutput=journal
+StandardError=journal
+
+# Allow up to 2 hours — full scrape + clone can be slow on first run
+TimeoutStartSec=7200
+
+# Don't retry on failure — wait for the next scheduled run
+Restart=no
