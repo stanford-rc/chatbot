@@ -250,6 +250,7 @@ if [[ "$MODE" == "dev" ]]; then
     APPTAINERENV_PYTHONPATH=/workspace \
     APPTAINERENV_HF_HOME="$HF_HOME" \
     APPTAINERENV_ADA_CONFIG="$CONTAINER_ADA_CONFIG" \
+    APPTAINERENV_VLLM_USE_V1=0 \
     apptainer exec --nv instance://chatapi \
         /opt/chatbot-env/bin/python -m uvicorn app.main:app \
         --host 0.0.0.0 \
@@ -267,6 +268,7 @@ else
     APPTAINERENV_PYTHONPATH=/workspace \
     APPTAINERENV_HF_HOME="$HF_HOME" \
     APPTAINERENV_ADA_CONFIG="$CONTAINER_ADA_CONFIG" \
+    APPTAINERENV_VLLM_USE_V1=0 \
     apptainer exec --nv instance://chatapi \
         /opt/chatbot-env/bin/python -m uvicorn app.main:app \
         --host 0.0.0.0 \
