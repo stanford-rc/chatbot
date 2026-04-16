@@ -123,25 +123,44 @@ fi
 BIND_MOUNTS=$(python3 - "$APP_DIR" "$ADA_CONFIG" <<'PYEOF'
 import sys, os, yaml
 
-app_dir   = sys.argv[1]
-cfg_path  = sys.argv[2]
+app_dir  = sys.argv[1]
+cfg_path = sys.argv[2]
 
 with open(cfg_path) as f:
     c = yaml.safe_load(f)
 
+# data_dir: where /workspace/ paths live on the host.
+# Empty or absent → use app_dir (same as the /workspace mount).
+data_dir = c.get('data_dir', '') or app_dir
+
+cfg_dir = os.path.dirname(os.path.abspath(cfg_path))
+
+def resolve(path):
+    """Mirrors config.py _resolve(): remap /workspace/ prefix to data_dir,
+    then make relative paths absolute from the config file's directory."""
+    if not path:
+        return path
+    path = str(path)
+    if path == '/workspace':
+        return data_dir
+    if path.startswith('/workspace/'):
+        return os.path.join(data_dir, path[len('/workspace/'):])
+    if not os.path.isabs(path):
+        return os.path.join(cfg_dir, path)
+    return path
+
 dirs = set()
 
 def add(path):
-    """Add the directory (or the path itself if it's a dir) to the bind set."""
+    path = resolve(path)
     if not path:
         return
-    path = str(path)
-    # Resolve relative paths from config file location
-    if not os.path.isabs(path):
-        path = os.path.join(os.path.dirname(os.path.abspath(cfg_path)), path)
-    # Use parent dir for file paths
+    # Use parent dir for file paths (has an extension and isn't an existing dir)
     d = path if os.path.isdir(path) or not os.path.splitext(path)[1] else os.path.dirname(path)
     if d and d != '/':
+        # Create the directory on the host if it doesn't exist so Apptainer
+        # can bind-mount it without failing.
+        os.makedirs(d, exist_ok=True)
         dirs.add(d)
 
 # Model
@@ -167,13 +186,16 @@ add(c.get('hf_home', ''))
 add(c.get('data_dir', ''))
 
 # Config file dir (if outside app_dir)
-add(os.path.dirname(os.path.abspath(cfg_path)))
+add(cfg_dir)
 
 # Build args: APP_DIR → /workspace, everything else maps to itself
 parts = [f'--bind {app_dir}:/workspace']
 for d in sorted(dirs):
-    if os.path.commonpath([d, app_dir]) == app_dir:
-        continue  # inside app_dir, already covered by /workspace mount
+    try:
+        if os.path.commonpath([d, app_dir]) == app_dir:
+            continue  # inside app_dir, already covered by /workspace mount
+    except ValueError:
+        pass  # different drives on Windows; shouldn't happen on Linux
     parts.append(f'--bind {d}:{d}')
 
 print(' '.join(parts))
