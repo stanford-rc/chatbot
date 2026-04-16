@@ -369,13 +369,17 @@ class RAGService:
             logger.info(f"Index cache stale for '{cluster_name}' — rebuilding.")
             return None
 
-        split_docs = pickle.loads(docs_path.read_bytes())
-        bm25       = pickle.loads(bm25_path.read_bytes())
-        faiss_index = None
-        if FAISS_AVAILABLE and self.embedding_model is not None and faiss_path.exists():
-            faiss_index = faiss.read_index(str(faiss_path))
-        logger.info(f"Loaded '{cluster_name}' index from disk cache ({len(split_docs)} chunks).")
-        return bm25, faiss_index, split_docs
+        try:
+            split_docs  = pickle.loads(docs_path.read_bytes())
+            bm25        = pickle.loads(bm25_path.read_bytes())
+            faiss_index = None
+            if FAISS_AVAILABLE and self.embedding_model is not None and faiss_path.exists():
+                faiss_index = faiss.read_index(str(faiss_path))
+            logger.info(f"Loaded '{cluster_name}' index from disk cache ({len(split_docs)} chunks).")
+            return bm25, faiss_index, split_docs
+        except Exception as e:
+            logger.warning(f"Failed to load index cache for '{cluster_name}' ({e}) — rebuilding.")
+            return None
 
     def _save_index_cache(
         self, cluster_name: str, fingerprint: str,
