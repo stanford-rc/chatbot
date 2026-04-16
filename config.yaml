@@ -52,10 +52,10 @@ caching:
   SEMANTIC_CACHE_CLEAR_ON_STARTUP: false
   
   # Similarity threshold for semantic cache hits (0.0-1.0)
-  # Lower = more permissive (e.g., 0.70 catches similar phrasings)
-  # Higher = stricter (e.g., 0.95 only near-identical questions)
-  # Recommended: 0.70-0.75 for good semantic matching
-  SEMANTIC_CACHE_THRESHOLD: 0.70
+  # Lower = more permissive (0.70 causes false positives across unrelated topics)
+  # Higher = stricter (0.92+ only near-identical phrasings)
+  # Recommended: 0.92 to avoid cross-topic cache pollution
+  SEMANTIC_CACHE_THRESHOLD: 0.85
   
   # Cache database file path — absolute /workspace/ path so the file lands in the
   # bind-mounted host directory regardless of CWD inside the Apptainer container.

@@ -824,18 +824,21 @@ class RAGService:
             for t in cited_titles
             if _resolve_title(t) is not None
         ]
-        source_objects = self._format_sources(cited_docs) if cited_docs else []
+        # Show all retrieved docs as sources — they all contributed to the answer.
+        # cited_docs (inline citations) is a subset; surfacing only them hides relevant docs.
+        source_objects = self._format_sources(retrieved_docs)
 
         # Grounding safety net: flag ungrounded cluster-specific answers.
-        # Skip if the model made genuine multi-word citation attempts — those
-        # indicate it's trying to ground its answer even if the title didn't
-        # match exactly (avoids false-positive disclaimers on cited answers).
+        # Only fire if retrieval came up empty — if docs were retrieved, the
+        # answer is grounded in those docs regardless of whether the model
+        # remembered to include inline citation links.
         retrieved_titles = set(title_to_doc.keys())
         genuine_citations = {t for t in cited_titles if len(t.split()) > 1
                              and not t.startswith('url_')}
-        # Grounding check — only skip if a genuine citation resolved correctly.
-        if genuine_citations and (genuine_citations & retrieved_titles
-                                   or any(_resolve_title(t) for t in genuine_citations)):
+        if retrieved_docs:
+            pass  # docs were retrieved — answer is grounded, skip disclaimer
+        elif genuine_citations and (genuine_citations & retrieved_titles
+                                    or any(_resolve_title(t) for t in genuine_citations)):
             pass  # model cited a resolvable source — consider it grounded
         else:
             final_answer = self._check_grounding(final_answer, cited_titles, retrieved_titles)
