@@ -2,12 +2,13 @@ import hashlib
 import json
 import logging
 import os
+import pickle
 import re
 import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import frontmatter
 import numpy as np
@@ -327,6 +328,73 @@ class RAGService:
         self.llm = RunnableLambda(self._generate_response)
         logger.info("Model loaded successfully via vLLM.")
 
+    # ── Index disk cache ──────────────────────────────────────────────────────
+
+    def _index_cache_dir(self) -> Path:
+        """Derive cache dir from SEMANTIC_CACHE_DB location — no extra config needed."""
+        d = Path(self.settings.SEMANTIC_CACHE_DB).parent / 'indices'
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _index_fingerprint(self, cluster_path: str, shared_docs_path: str) -> str:
+        """SHA-256 over all source .md content + chunking + embedding model.
+
+        Any change to docs, chunk size, or model invalidates the cache for
+        that cluster.
+        """
+        h = hashlib.sha256()
+        for base in sorted([p for p in [cluster_path, shared_docs_path] if p and os.path.isdir(p)]):
+            for md in sorted(Path(base).glob('**/*.md')):
+                h.update(str(md).encode())
+                h.update(md.read_bytes())
+        h.update(str(self.settings.CHUNK_SIZE).encode())
+        h.update(str(self.settings.CHUNK_OVERLAP).encode())
+        h.update(str(self.settings.VECTOR_MODEL).encode())
+        return h.hexdigest()
+
+    def _try_load_index_cache(
+        self, cluster_name: str, fingerprint: str
+    ) -> Optional[tuple]:
+        """Return (bm25, faiss_index_or_None, split_docs) if cache is valid, else None."""
+        d = self._index_cache_dir()
+        meta_path = d / f'{cluster_name}.meta.json'
+        bm25_path = d / f'{cluster_name}.bm25.pkl'
+        docs_path = d / f'{cluster_name}.docs.pkl'
+        faiss_path = d / f'{cluster_name}.faiss'
+
+        if not (meta_path.exists() and bm25_path.exists() and docs_path.exists()):
+            return None
+        meta = json.loads(meta_path.read_text())
+        if meta.get('fingerprint') != fingerprint:
+            logger.info(f"Index cache stale for '{cluster_name}' — rebuilding.")
+            return None
+
+        split_docs = pickle.loads(docs_path.read_bytes())
+        bm25       = pickle.loads(bm25_path.read_bytes())
+        faiss_index = None
+        if FAISS_AVAILABLE and self.embedding_model is not None and faiss_path.exists():
+            faiss_index = faiss.read_index(str(faiss_path))
+        logger.info(f"Loaded '{cluster_name}' index from disk cache ({len(split_docs)} chunks).")
+        return bm25, faiss_index, split_docs
+
+    def _save_index_cache(
+        self, cluster_name: str, fingerprint: str,
+        bm25, faiss_index, split_docs: list
+    ) -> None:
+        """Persist BM25 + FAISS index to disk for fast reloads."""
+        d = self._index_cache_dir()
+        (d / f'{cluster_name}.docs.pkl').write_bytes(pickle.dumps(split_docs))
+        (d / f'{cluster_name}.bm25.pkl').write_bytes(pickle.dumps(bm25))
+        if faiss_index is not None and FAISS_AVAILABLE:
+            faiss.write_index(faiss_index, str(d / f'{cluster_name}.faiss'))
+        (d / f'{cluster_name}.meta.json').write_text(json.dumps({
+            'fingerprint': fingerprint,
+            'cluster':     cluster_name,
+            'num_chunks':  len(split_docs),
+            'created':     time.time(),
+        }))
+        logger.info(f"Saved '{cluster_name}' index to disk cache.")
+
     def _load_retrievers(self):
         """Load BM25 and (optionally) FAISS retrievers for each cluster"""
 
@@ -352,6 +420,17 @@ class RAGService:
                 logger.warning(f"Directory not found for cluster '{cluster_name}': {path}. Skipping.")
                 continue
 
+            # ── Try disk cache first ──────────────────────────────────────────
+            fingerprint = self._index_fingerprint(path, self.settings.SHARED_DOCS_PATH)
+            cached = self._try_load_index_cache(cluster_name, fingerprint)
+            if cached:
+                bm25, faiss_index, split_docs = cached
+                self.retrievers[cluster_name] = bm25
+                if faiss_index is not None:
+                    self.vector_stores[cluster_name] = {"index": faiss_index, "docs": split_docs}
+                continue
+
+            # ── Cache miss: build from scratch ───────────────────────────────
             logger.info(f"Ingesting documents for cluster: {cluster_name}")
             documents = self._ingest_markdown_files(path)
             if not documents:
@@ -364,10 +443,12 @@ class RAGService:
             # higher without any explicit filtering needed.
             all_documents = documents + shared_docs
             split_docs = self._split_documents(all_documents)
-            self.retrievers[cluster_name] = BM25Retriever.from_documents(split_docs)
+            bm25 = BM25Retriever.from_documents(split_docs)
+            self.retrievers[cluster_name] = bm25
             logger.info(f"Created BM25 retriever for '{cluster_name}' ({len(split_docs)} chunks).")
 
             # Build FAISS index for this cluster
+            faiss_index = None
             if self.embedding_model is not None:
                 embeddings = self.embedding_model.encode(
                     [doc.page_content for doc in split_docs],
@@ -375,13 +456,15 @@ class RAGService:
                     show_progress_bar=False,
                 )
                 dimension = embeddings.shape[1]
-                index = faiss.IndexFlatIP(dimension)  # Inner product on normalized vectors = cosine similarity
-                index.add(embeddings.astype(np.float32))
+                faiss_index = faiss.IndexFlatIP(dimension)  # Inner product on normalized vectors = cosine similarity
+                faiss_index.add(embeddings.astype(np.float32))
                 self.vector_stores[cluster_name] = {
-                    "index": index,
+                    "index": faiss_index,
                     "docs": split_docs,
                 }
                 logger.info(f"Created FAISS index for '{cluster_name}' ({len(split_docs)} vectors, dim={dimension}).")
+
+            self._save_index_cache(cluster_name, fingerprint, bm25, faiss_index, split_docs)
 
     def _retrieve_bm25_with_scores(self, query: str, cluster: str) -> List[Tuple[Document, float]]:
         """Retrieve documents via BM25 with relevance scores."""
