@@ -2,14 +2,8 @@ bootstrap: docker
 from: python:3.11-slim
 
 %files
-    docs/sherlock/    /workspace/sherlock
-    docs/farmshare/   /workspace/farmshare
-    docs/oak/         /workspace/oak
-    docs/elm/         /workspace/elm
-    app/              /workspace/app
-    requirements.txt  /workspace/requirements.txt
-    config.yaml       /workspace/config.yaml
-    
+    requirements.txt  /requirements.txt
+
 %environment
     export PATH=/usr/local/cuda/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
@@ -41,7 +35,7 @@ from: python:3.11-slim
     # Create virtual environment and install PyTorch with CUDA support
     uv venv --system-site-packages /opt/chatbot-env
     . /opt/chatbot-env/bin/activate
-    uv pip install --torch-backend=cu130 --requirements /workspace/requirements.txt
+    uv pip install --torch-backend=cu130 --requirements /requirements.txt
     # vLLM must be installed from the pre-built cu130 aarch64 wheel — uv resolves
     # vllm==0.6.5 (wrong) from PyPI because it doesn't know about the cu130 index.
     # The official 0.18.0+cu130 wheel ships ARM64 kernels and requires torch==2.10.0.
