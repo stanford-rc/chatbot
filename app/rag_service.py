@@ -544,9 +544,14 @@ class RAGService:
             rrf_scores[key] += faiss_weight / (k + rank + 1)
             doc_map[key] = doc
 
-        # Sort by fused score descending
+        # Sort by fused score descending; attach score to metadata for source filtering
         sorted_keys = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
-        return [doc_map[key] for key in sorted_keys[:self.settings.MAX_RETRIEVED_DOCS]]
+        results = []
+        for key in sorted_keys[:self.settings.MAX_RETRIEVED_DOCS]:
+            doc = doc_map[key]
+            doc.metadata['rrf_score'] = rrf_scores[key]
+            results.append(doc)
+        return results
 
     def _build_chain(self):
         """Build the RAG chain with retriever, prompt, and LLM"""
@@ -571,6 +576,10 @@ class RAGService:
                 logger.info(f"FAISS returned {len(faiss_results)} docs")
                 retrieved_docs = self._reciprocal_rank_fusion(bm25_results, faiss_results)
             else:
+                # Normalize BM25 scores to 0-1 and attach to metadata
+                max_score = bm25_results[0][1] if bm25_results else 1.0
+                for doc, score in bm25_results:
+                    doc.metadata['rrf_score'] = score / max_score if max_score > 0 else 0.0
                 retrieved_docs = [doc for doc, _score in bm25_results]
 
             inputs['retrieved_docs'] = retrieved_docs
@@ -822,15 +831,15 @@ class RAGService:
                     f'[{cited}]({title_to_url[canonical]})'
                 )
 
-        # Build sources list from matched cited documents
+        # Sources = every doc the LLM cited inline (works-cited style).
+        # The prompt instructs the model to cite every doc it uses, so this
+        # should naturally match what it actually drew from.
         cited_docs = [
             title_to_doc[_resolve_title(t)]
             for t in cited_titles
             if _resolve_title(t) is not None
         ]
-        # Show all retrieved docs as sources — they all contributed to the answer.
-        # cited_docs (inline citations) is a subset; surfacing only them hides relevant docs.
-        source_objects = self._format_sources(retrieved_docs)
+        source_objects = self._format_sources(cited_docs)
 
         # Grounding safety net: flag ungrounded cluster-specific answers.
         # Only fire if retrieval came up empty — if docs were retrieved, the
