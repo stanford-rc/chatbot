@@ -816,10 +816,27 @@ class RAGService:
             title_lower_map[title.lower()] = title
 
         def _resolve_title(cited: str):
-            """Return the canonical doc title for a citation, or None."""
+            """Return the canonical doc title for a citation, or None.
+
+            Handles three cases:
+            1. Exact match: "Storage"
+            2. Case-insensitive: "storage"
+            3. Section-qualified: "Storage > Where should I store my files?"
+               — the model is shown "--- Document: Title > Section ---" headers
+               and may cite the full label; strip the section part to resolve.
+            """
             if cited in title_to_doc:
                 return cited
-            return title_lower_map.get(cited.lower())
+            found = title_lower_map.get(cited.lower())
+            if found:
+                return found
+            # Strip " > Section" suffix the model may have appended
+            if ' > ' in cited:
+                base = cited.split(' > ')[0].strip()
+                found = title_lower_map.get(base.lower())
+                if found:
+                    return found
+            return None
 
         # Convert [Title] citations to inline markdown links [Title](URL)
         final_answer = llm_answer
