@@ -1,70 +1,100 @@
 """
-stats.py — In-memory usage statistics tracker for Ada.
+stats.py — Usage statistics tracker.
 
-Tracks query volume, cache performance, latency, errors, per-cluster
-usage, and popular queries. All counters reset on service restart.
+Every recorded query is persisted to the shared SQLite db at
+`settings.STATS_DB` (see stats_db.py). Aggregates for the dashboard
+(`/stats`) are computed by querying the db with service/scope/date
+filters. Semantic top-queries clustering is kept in-memory per-process
+(embedding lookups are too slow to run per dashboard request).
 
-Popular queries are semantically collapsed: similar phrasings are grouped
-under a single canonical representative using the same sentence-transformers
-model as the semantic cache (runs on CPU, no GPU impact).
+Public API — unchanged for compatibility with existing callers:
+    stats_tracker.set_log_path(path)          # now points at the sqlite db path
+    stats_tracker.set_embedding_model(model)
+    stats_tracker.set_feedback_log_path(path) # no-op; kept for backwards compat
+    stats_tracker.record_query(
+        cluster, query, latency_s, cache_hit,
+        error=False, service=None, scope=None, tool=None, caller=None,
+    )
+    stats_tracker.record_feedback(query_id, cluster, rating, tags,
+                                  cluster_correction, comment,
+                                  service=None, scope=None)
+    stats_tracker.get_stats(services=None, scopes=None, since=None, until=None) -> dict
 
-Access via GET /stats.
+Each service that instantiates this tracker should call
+    StatsTracker(default_service='chatbot',    default_scope='public')
+or set the defaults after construction via `set_service_defaults()`. Then
+individual call sites can override via kwargs where needed.
 """
 
-import json
+from __future__ import annotations
+
+import logging
 import threading
 from collections import defaultdict
+from contextlib import closing
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple  # noqa: F401
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from app import stats_db
+
+logger = logging.getLogger(__name__)
+
 
 class StatsTracker:
-    def __init__(self, similarity_threshold: float = 0.70):
+    def __init__(
+        self,
+        similarity_threshold: float = 0.70,
+        default_service: str = "",
+        default_scope: str = "unknown",
+    ):
         self._lock = threading.Lock()
         self.start_time = datetime.now(timezone.utc)
         self._similarity_threshold = similarity_threshold
 
-        self.total_queries: int = 0
-        self.cache_hits: int = 0
-        self.cache_misses: int = 0
-        self.errors: int = 0
+        # Service defaults — call sites can still override per-call.
+        self._default_service = default_service
+        self._default_scope = default_scope
 
-        self.queries_by_cluster: Dict[str, int] = defaultdict(int)
-        self.queries_by_hour: Dict[str, int] = defaultdict(int)
+        # Path to the shared SQLite db (set via set_log_path)
+        self._db_path: str = ""
 
-        # Feedback counters
-        self.feedback_up: int = 0
-        self.feedback_down: int = 0
-        self.feedback_tags: Dict[str, int] = defaultdict(int)
-        self.feedback_by_cluster: Dict[str, Dict[str, int]] = defaultdict(
-            lambda: {"up": 0, "down": 0}
-        )
-        self.cluster_corrections: Dict[str, int] = defaultdict(int)
-
-        # Keep last 1000 latency samples for percentile calculation
-        self._latencies: List[float] = []
-
-        # Semantic query clustering:
-        #   _canonical_queries: list of (canonical_text, embedding, count)
+        # Semantic query clustering (in-memory, per-process).
+        # _canonical_queries: list of (canonical_text, embedding, count)
         self._canonical_queries: List[Tuple[str, np.ndarray, int]] = []
 
         # Embedding model — injected after startup via set_embedding_model()
         self._embedding_model = None
 
-        # Path to append-only JSON-lines log — injected via set_log_path()
-        self._log_path: str = ''
+    # ── Configuration ─────────────────────────────────────────────────────
 
     def set_embedding_model(self, model) -> None:
         """Inject the sentence-transformers model after it's loaded at startup."""
         self._embedding_model = model
 
     def set_log_path(self, path: str) -> None:
-        """Inject the stats log file path from settings."""
-        self._log_path = path
+        """
+        Point the tracker at the shared SQLite db. Name kept for
+        backwards compatibility with the legacy JSONL API — path is now
+        expected to be a `.sqlite` file, not `.jsonl`.
+        """
+        self._db_path = path
+        if path:
+            try:
+                stats_db.init_db(path)
+            except Exception as e:
+                logger.error(f"Failed to init stats db at {path}: {e}")
 
-    # ── Recording ──────────────────────────────────────────────────────────
+    def set_feedback_log_path(self, path: str) -> None:
+        """No-op — feedback now writes to the same SQLite db as queries."""
+        pass
+
+    def set_service_defaults(self, service: str, scope: str) -> None:
+        self._default_service = service
+        self._default_scope = scope
+
+    # ── Recording ─────────────────────────────────────────────────────────
 
     def _embed(self, text: str) -> Optional[np.ndarray]:
         if self._embedding_model is None:
@@ -81,12 +111,13 @@ class StatsTracker:
         or create a new canonical entry if no match exceeds the threshold.
         Embedding happens outside the lock to minimise contention.
         """
-        normalised = query.strip().lower()[:200]
+        normalised = (query or "").strip().lower()[:200]
+        if not normalised:
+            return
         embedding = self._embed(normalised)
 
         with self._lock:
             if embedding is not None and self._canonical_queries:
-                # Cosine similarities against all canonicals
                 canonicals_emb = np.stack([e for _, e, _ in self._canonical_queries])
                 sims = canonicals_emb @ embedding
                 best_idx = int(np.argmax(sims))
@@ -95,171 +126,181 @@ class StatsTracker:
                     self._canonical_queries[best_idx] = (text, emb, count + 1)
                     return
 
-            # No match — new canonical
-            self._canonical_queries.append((normalised, embedding if embedding is not None else np.array([]), 1))
+            self._canonical_queries.append(
+                (normalised, embedding if embedding is not None else np.array([]), 1)
+            )
 
     def record_query(
         self,
-        cluster: str,
-        query: str,
-        latency_s: float,
-        cache_hit: bool,
+        cluster: str = "",
+        query: str = "",
+        latency_s: float = 0.0,
+        cache_hit: Optional[bool] = None,
         error: bool = False,
-        query_id: Optional[str] = None,
+        service: Optional[str] = None,
+        scope: Optional[str] = None,
+        tool: Optional[str] = None,
+        caller: Optional[str] = None,
     ) -> None:
-        with self._lock:
-            self.total_queries += 1
+        service = service or self._default_service
+        scope = scope or self._default_scope
 
-            if error:
-                self.errors += 1
-            elif cache_hit:
-                self.cache_hits += 1
-            else:
-                self.cache_misses += 1
+        if not self._db_path:
+            # No db configured — semantic canonicals still work, but no persistence.
+            if query:
+                self._find_or_create_canonical(query)
+            return
 
-            self.queries_by_cluster[cluster] += 1
+        try:
+            with closing(stats_db.connect(self._db_path)) as conn:
+                stats_db.insert_query(
+                    conn,
+                    service=service,
+                    scope=scope,
+                    latency_s=latency_s,
+                    cache_hit=cache_hit,
+                    error=error,
+                    tool=tool,
+                    cluster=cluster or None,
+                    query=query or None,
+                    caller=caller,
+                )
+        except Exception as e:
+            # Never let stats persistence break query serving.
+            logger.warning(f"stats_db insert_query failed: {e}")
 
-            # Latency ring-buffer
-            self._latencies.append(latency_s)
-            if len(self._latencies) > 1000:
-                self._latencies.pop(0)
-
-            # Hourly bucket (UTC)
-            hour_key = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:00 UTC")
-            self.queries_by_hour[hour_key] += 1
-
-            # Append one JSON line to the persistent stats log
-            if self._log_path:
-                try:
-                    record = {
-                        "type": "query",
-                        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "query_id": query_id,
-                        "cluster": cluster,
-                        "query": query,
-                        "latency_s": round(latency_s, 3),
-                        "cache_hit": cache_hit,
-                        "error": error,
-                    }
-                    with open(self._log_path, 'a') as f:
-                        f.write(json.dumps(record) + '\n')
-                except Exception:
-                    pass  # never let logging break query serving
-
-        # Semantic collapsing runs outside the main lock (embedding is slow)
-        self._find_or_create_canonical(query)
+        # Semantic canonicals run outside any db work
+        if query:
+            self._find_or_create_canonical(query)
 
     def record_feedback(
         self,
-        query_id: str,
+        query_id: Optional[str],
         cluster: str,
-        rating: int,                          # 1 or -1
-        tags: Optional[List[str]] = None,
-        cluster_correction: Optional[str] = None,
-        comment: Optional[str] = None,
+        rating: Optional[int],
+        tags: Optional[List[str]],
+        cluster_correction: Optional[str],
+        comment: Optional[str],
+        service: Optional[str] = None,
+        scope: Optional[str] = None,
     ) -> None:
-        with self._lock:
-            if rating > 0:
-                self.feedback_up += 1
-                self.feedback_by_cluster[cluster]["up"] += 1
-            else:
-                self.feedback_down += 1
-                self.feedback_by_cluster[cluster]["down"] += 1
-                for tag in (tags or []):
-                    self.feedback_tags[tag] += 1
-                if cluster_correction:
-                    self.cluster_corrections[cluster_correction] += 1
+        service = service or self._default_service
+        scope = scope or self._default_scope
 
-            if self._log_path:
-                try:
-                    record = {
-                        "type": "feedback",
-                        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "query_id": query_id,
-                        "cluster": cluster,
-                        "rating": rating,
-                        "tags": tags or [],
-                        "cluster_correction": cluster_correction,
-                        "comment": comment,
-                    }
-                    with open(self._log_path, 'a') as f:
-                        f.write(json.dumps(record) + '\n')
-                except Exception:
-                    pass
+        if not self._db_path:
+            return
 
-    # ── Reporting ──────────────────────────────────────────────────────────
+        try:
+            with closing(stats_db.connect(self._db_path)) as conn:
+                stats_db.insert_feedback(
+                    conn,
+                    service=service,
+                    scope=scope,
+                    query_id=query_id,
+                    cluster=cluster or None,
+                    rating=rating,
+                    tags=tags,
+                    cluster_correction=cluster_correction,
+                    comment=comment,
+                )
+        except Exception as e:
+            logger.warning(f"stats_db insert_feedback failed: {e}")
 
-    def get_stats(self) -> dict:
-        with self._lock:
-            uptime_s = (datetime.now(timezone.utc) - self.start_time).total_seconds()
+    # ── Reporting ─────────────────────────────────────────────────────────
 
-            # Latency percentiles
-            sorted_lat = sorted(self._latencies)
-            n = len(sorted_lat)
+    def get_stats(
+        self,
+        services: Optional[List[str]] = None,
+        scopes: Optional[List[str]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> dict:
+        """
+        Return dashboard-shaped stats aggregated from the SQLite db, with
+        service/scope/date filters. Semantic top-queries are per-process
+        (in-memory) and are not filtered by service — they reflect only
+        this tracker's own record_query calls since process start.
+        """
+        uptime_s = (datetime.now(timezone.utc) - self.start_time).total_seconds()
 
-            def pct(p: float) -> float:
-                if n == 0:
-                    return 0.0
-                idx = min(int(n * p), n - 1)
-                return round(sorted_lat[idx], 3)
-
-            avg_lat = round(sum(sorted_lat) / n, 3) if n > 0 else 0.0
-
-            cache_total = self.cache_hits + self.cache_misses
-            hit_rate = round(self.cache_hits / cache_total, 3) if cache_total > 0 else 0.0
-
-            # Last 24 hourly buckets (sorted)
-            recent_hours = dict(
-                sorted(self.queries_by_hour.items())[-24:]
+        aggregates = (
+            stats_db.query_aggregates(
+                self._db_path,
+                services=services,
+                scopes=scopes,
+                since=since,
+                until=until,
             )
+            if self._db_path
+            else _empty_aggregates()
+        )
+        feedback = (
+            stats_db.query_feedback_aggregates(
+                self._db_path,
+                services=services,
+                scopes=scopes,
+                since=since,
+                until=until,
+            )
+            if self._db_path
+            else _empty_feedback()
+        )
 
-            # Top 10 canonical queries by count
+        with self._lock:
             top_queries = sorted(
                 [(text, count) for text, _, count in self._canonical_queries],
                 key=lambda x: x[1],
                 reverse=True,
             )[:10]
 
-            feedback_total = self.feedback_up + self.feedback_down
-            satisfaction = round(self.feedback_up / feedback_total, 3) if feedback_total > 0 else None
-
-            return {
-                "uptime_seconds": round(uptime_s),
-                "since": self.start_time.strftime("%Y-%m-%d %H:%M UTC"),
-                "total_queries": self.total_queries,
-                "cache": {
-                    "hits": self.cache_hits,
-                    "misses": self.cache_misses,
-                    "hit_rate": hit_rate,
-                },
-                "errors": self.errors,
-                "latency": {
-                    "avg_s": avg_lat,
-                    "p50_s": pct(0.50),
-                    "p95_s": pct(0.95),
-                    "p99_s": pct(0.99),
-                    "sample_count": n,
-                },
-                "queries_by_cluster": dict(self.queries_by_cluster),
-                "queries_by_hour": recent_hours,
-                "top_queries": top_queries,
-                "feedback": {
-                    "up": self.feedback_up,
-                    "down": self.feedback_down,
-                    "total": feedback_total,
-                    "satisfaction": satisfaction,
-                    "tags": dict(self.feedback_tags),
-                    "by_cluster": {k: dict(v) for k, v in self.feedback_by_cluster.items()},
-                    "cluster_corrections": dict(self.cluster_corrections),
-                },
-            }
+        return {
+            "uptime_seconds": round(uptime_s),
+            "since": self.start_time.strftime("%Y-%m-%d %H:%M UTC"),
+            "total_queries":       aggregates["total_queries"],
+            "cache":               aggregates["cache"],
+            "errors":              aggregates["errors"],
+            "latency":             aggregates["latency"],
+            "queries_by_cluster":  aggregates["queries_by_cluster"],
+            "queries_by_service":  aggregates["queries_by_service"],
+            "queries_by_tool":     aggregates["queries_by_tool"],
+            "queries_by_hour":     aggregates["queries_by_hour"],
+            "top_queries":         top_queries,
+            "feedback":            feedback,
+        }
 
     def reset(self) -> None:
-        """Reset all counters (e.g. for testing)."""
+        """Reset the in-memory canonicals + start_time. Does NOT touch SQLite."""
         with self._lock:
             threshold = self._similarity_threshold
-            self.__init__(similarity_threshold=threshold)
+            default_service = self._default_service
+            default_scope = self._default_scope
+            db_path = self._db_path
+            embedding_model = self._embedding_model
+            self.__init__(
+                similarity_threshold=threshold,
+                default_service=default_service,
+                default_scope=default_scope,
+            )
+            self._db_path = db_path
+            self._embedding_model = embedding_model
 
 
-# Module-level singleton — imported by rag_service and main
-stats_tracker = StatsTracker()
+def _empty_aggregates() -> dict:
+    return {
+        "total_queries": 0,
+        "cache": {"hits": 0, "misses": 0, "hit_rate": 0.0},
+        "errors": 0,
+        "latency": {"avg_s": 0.0, "p50_s": 0.0, "p95_s": 0.0, "p99_s": 0.0, "sample_count": 0},
+        "queries_by_cluster": {},
+        "queries_by_service": {},
+        "queries_by_tool": {},
+        "queries_by_hour": {},
+    }
+
+
+def _empty_feedback() -> dict:
+    return {"total": 0, "satisfaction": 0.0, "up": 0, "down": 0, "by_cluster": {}}
+
+
+# Chatbot's tracker singleton. Public docbot → always public scope.
+stats_tracker = StatsTracker(default_service="chatbot", default_scope="public")

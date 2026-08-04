@@ -15,7 +15,8 @@ from app.stats import stats_tracker
 
 # Setup logging
 os.makedirs(settings.LOG_DIR, exist_ok=True)
-stats_tracker.set_log_path(settings.STATS_LOG)
+# Point stats tracker at the shared SQLite db (replaces legacy JSONL path).
+stats_tracker.set_log_path(settings.STATS_DB)
 logging.basicConfig(
     level=logging.INFO,
     filename=os.path.join(settings.LOG_DIR, 'myapp.log'),

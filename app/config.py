@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     LOG_DIR: str = Field(default=_resolve(config.get('logging', {}).get('log_dir', 'logs')), env="LOG_DIR")
     STATS_LOG: str = _resolve(config.get('logging', {}).get('stats_log', ''))
 
+    # Shared stats SQLite db — the src-mcp-hosted /dashboard reads across
+    # this and src-mcp/claude-mcp. Chatbot writes into the same file so its
+    # query stats show up alongside the others under service='chatbot'.
+    STATS_DB: str = Field(
+        default=_resolve(config.get('logging', {}).get('stats_db', 'logs/stats.sqlite')),
+        env="STATS_DB",
+    )
+
     # HuggingFace cache directory — must be writable inside the container.
     HF_HOME: str = _resolve(config.get('hf_home', '/workspace/.hf_cache'))
 
